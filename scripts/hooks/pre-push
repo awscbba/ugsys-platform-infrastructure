@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# pre-push hook — blocks direct push to main
+set -euo pipefail
+
+RED='\033[0;31m'
+NC='\033[0m'
+
+while read local_ref local_sha remote_ref remote_sha; do
+  if [[ "$remote_ref" == "refs/heads/main" ]]; then
+    echo -e "${RED}✗ Direct push to 'main' is not allowed.${NC}"
+    echo "  Open a Pull Request instead."
+    exit 1
+  fi
+done
+
+exit 0
