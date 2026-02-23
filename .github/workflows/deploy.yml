@@ -118,8 +118,13 @@ jobs:
         continue-on-error: true
         uses: slackapi/slack-github-action@v1.26.0
         with:
+          method: chat.postMessage
+          token: ${{ secrets.SLACK_BOT_TOKEN }}
           payload: |
             {
+              "channel": "${{ secrets.SLACK_CHANNEL_ID }}",
+              "username": "ugsys CI/CD",
+              "icon_emoji": ":white_check_mark:",
               "blocks": [
                 {
                   "type": "header",
@@ -134,17 +139,19 @@ jobs:
                 }
               ]
             }
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
 
       - name: Slack — failure
         if: needs.deploy.result != 'success'
         continue-on-error: true
         uses: slackapi/slack-github-action@v1.26.0
         with:
+          method: chat.postMessage
+          token: ${{ secrets.SLACK_BOT_TOKEN }}
           payload: |
             {
+              "channel": "${{ secrets.SLACK_CHANNEL_ID }}",
+              "username": "ugsys CI/CD",
+              "icon_emoji": ":x:",
               "blocks": [
                 {
                   "type": "header",
@@ -159,6 +166,3 @@ jobs:
                 }
               ]
             }
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
