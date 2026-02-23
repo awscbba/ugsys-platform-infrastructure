@@ -125,6 +125,7 @@ jobs:
               "channel": "${{ secrets.SLACK_CHANNEL_ID }}",
               "username": "ugsys CI/CD",
               "icon_emoji": ":white_check_mark:",
+              "text": "✅ Deploy succeeded — ugsys-platform-infrastructure",
               "blocks": [
                 {
                   "type": "header",
@@ -152,6 +153,7 @@ jobs:
               "channel": "${{ secrets.SLACK_CHANNEL_ID }}",
               "username": "ugsys CI/CD",
               "icon_emoji": ":x:",
+              "text": "❌ Deploy failed — ugsys-platform-infrastructure",
               "blocks": [
                 {
                   "type": "header",
