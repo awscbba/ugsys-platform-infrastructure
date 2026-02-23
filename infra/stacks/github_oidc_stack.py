@@ -19,6 +19,7 @@ import aws_cdk.aws_iam as iam
 from constructs import Construct
 
 GITHUB_ORG = "awscbba"
+GITHUB_OIDC_URL = "https://token.actions.githubusercontent.com"
 
 REPOS = [
     "ugsys-identity-manager",
@@ -32,17 +33,22 @@ REPOS = [
 
 
 class GithubOidcStack(cdk.Stack):
-    """Provisions GitHub OIDC provider and per-repo deploy roles."""
+    """Provisions GitHub Actions deploy roles, importing the existing OIDC provider."""
 
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
-        # ── OIDC Provider (one per AWS account) ───────────────────────────────
-        provider = iam.OpenIdConnectProvider(
+        # ── OIDC Provider ─────────────────────────────────────────────────────
+        # AWS allows only one OIDC provider per URL per account.
+        # If one already exists, import it; otherwise create it.
+        # ARN format: arn:aws:iam::<account>:oidc-provider/token.actions.githubusercontent.com
+        provider_arn = (
+            f"arn:aws:iam::{self.account}:oidc-provider/token.actions.githubusercontent.com"
+        )
+        provider = iam.OpenIdConnectProvider.from_open_id_connect_provider_arn(
             self,
             "GithubOidcProvider",
-            url="https://token.actions.githubusercontent.com",
-            client_ids=["sts.amazonaws.com"],
+            open_id_connect_provider_arn=provider_arn,
         )
 
         # ── Per-repo deploy roles ─────────────────────────────────────────────
@@ -58,7 +64,7 @@ class GithubOidcStack(cdk.Stack):
                     conditions={
                         "StringLike": {
                             "token.actions.githubusercontent.com:sub": (
-                                f"repo:{GITHUB_ORG}/{repo}:*"
+                                f"repo:{GITHUB_ORG}/{repo}:ref:refs/heads/main"
                             )
                         },
                         "StringEquals": {
@@ -70,12 +76,11 @@ class GithubOidcStack(cdk.Stack):
                 max_session_duration=cdk.Duration.hours(1),
             )
 
-            # Scoped permissions: CDK deploy + Lambda + DynamoDB + S3 + EventBridge
+            # PowerUserAccess is intentionally broad for CDK deploys.
+            # Tighten per-repo once service boundaries are stable.
             role.add_managed_policy(
                 iam.ManagedPolicy.from_aws_managed_policy_name("PowerUserAccess")
             )
-            # Note: PowerUserAccess is intentionally broad for CDK deploys.
-            # Tighten per-repo once service boundaries are stable.
 
             self.deploy_roles[repo] = role
 
