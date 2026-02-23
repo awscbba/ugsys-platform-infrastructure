@@ -1,23 +1,25 @@
 # ugsys-platform-infrastructure task runner
+# Run all commands from inside the repo root: cd ugsys-platform-infrastructure && just <recipe>
+set shell := ["bash", "-euo", "pipefail", "-c"]
+
 default:
     @just --list
 
+# ── Setup ─────────────────────────────────────────────────────────────────────
+
 # Install git hooks (run once after cloning)
 install-hooks:
-    @bash scripts/install-hooks.sh
+    bash scripts/install-hooks.sh
 
-# Uninstall git hooks
-uninstall-hooks:
-    @rm -f .git/hooks/pre-commit .git/hooks/pre-push
-    @echo "✓ Git hooks removed"
+# Install all dependencies (including dev)
+sync:
+    uv sync --extra dev
 
 # Create a feature branch
 branch name:
     git checkout -b feature/{{name}}
 
-# Install all dependencies (including dev)
-sync:
-    uv sync --extra dev
+# ── Code quality ──────────────────────────────────────────────────────────────
 
 # Lint CDK stacks
 lint:
@@ -31,30 +33,75 @@ format:
 format-check:
     uv tool run ruff format --check infra/stacks/
 
-# Synthesize all CDK stacks (validates without deploying)
-cdk-synth:
-    uv run cdk synth --app "python infra/app.py" --quiet
+# ── CDK (all run from infra/ where cdk.json lives) ───────────────────────────
 
-# Deploy all stacks (requires AWS credentials)
-cdk-deploy env="dev":
-    uv run cdk deploy --all --app "python infra/app.py" --context env={{env}}
+# Synthesize all stacks — validates without deploying
+synth:
+    cd infra && uv run cdk synth --quiet
 
-# Destroy all stacks
-cdk-destroy env="dev":
-    uv run cdk destroy --all --app "python infra/app.py" --context env={{env}}
+# Bootstrap CDK in your AWS account (one-time per account/region)
+# Usage: just bootstrap <account_id> [region] [env]
+bootstrap account region="us-east-1" env="prod":
+    @echo "=== CDK Bootstrap (account={{account}}, region={{region}}, env={{env}}) ==="
+    cd infra && uv run cdk bootstrap aws://{{account}}/{{region}} \
+        --context env={{env}} \
+        --context account={{account}} \
+        --context region={{region}}
+    @echo "✓ Bootstrap complete"
 
-# Show CDK diff
-cdk-diff:
-    uv run cdk diff --app "python infra/app.py"
+# Deploy OIDC stack first — creates GitHub Actions IAM roles
+# Then add AWS_ROLE_ARN + AWS_ACCOUNT_ID to GitHub repo/org secrets
+# Usage: just deploy-oidc <account_id> [region] [env]
+deploy-oidc account region="us-east-1" env="prod":
+    @echo "=== Deploying OIDC stack (account={{account}}, region={{region}}, env={{env}}) ==="
+    cd infra && uv run cdk deploy UgsysPlatformGithubOidc-{{env}} \
+        --context env={{env}} \
+        --context account={{account}} \
+        --context region={{region}} \
+        --require-approval never
+    @echo ""
+    @echo "✓ OIDC stack deployed. Add these to GitHub secrets:"
+    @echo "  AWS_ROLE_ARN   = arn:aws:iam::{{account}}:role/ugsys-github-deploy-ugsys-platform-infrastructure"
+    @echo "  AWS_ACCOUNT_ID = {{account}}"
 
-# IaC security scan with Checkov
+# Show diff against deployed state
+# Usage: just diff <account_id> [region] [env]
+diff account region="us-east-1" env="prod":
+    cd infra && uv run cdk diff --all \
+        --context env={{env}} \
+        --context account={{account}} \
+        --context region={{region}} \
+        2>&1 || true
+
+# Deploy all stacks
+# Usage: just deploy <account_id> [region] [env]
+deploy account region="us-east-1" env="prod":
+    @echo "=== CDK Deploy all (account={{account}}, region={{region}}, env={{env}}) ==="
+    cd infra && uv run cdk deploy --all \
+        --context env={{env}} \
+        --context account={{account}} \
+        --context region={{region}} \
+        --require-approval never \
+        --outputs-file cdk-outputs.json
+    @echo "✓ Deploy complete — outputs saved to infra/cdk-outputs.json"
+
+# Destroy all stacks (destructive!)
+# Usage: just destroy <account_id> [region] [env]
+destroy account region="us-east-1" env="dev":
+    @echo "=== CDK Destroy all (account={{account}}, region={{region}}, env={{env}}) ==="
+    cd infra && uv run cdk destroy --all \
+        --context env={{env}} \
+        --context account={{account}} \
+        --context region={{region}}
+
+# ── Security ──────────────────────────────────────────────────────────────────
+
+# IaC security scan with Checkov (runs synth first)
 iac-scan:
-    @echo "=== CDK Synth ==="
-    uv run cdk synth --app "python infra/app.py" --quiet
-    @echo "=== Checkov ==="
+    cd infra && uv run cdk synth --quiet
     uv tool run checkov -d infra/cdk.out --framework cloudformation --soft-fail || true
 
-# Security scan
+# Static security scan with Bandit
 security-scan:
     uv tool install bandit
     uv tool run bandit -r infra/stacks/ -ll -ii || true
