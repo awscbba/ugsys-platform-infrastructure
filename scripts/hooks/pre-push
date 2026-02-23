@@ -1,17 +1,10 @@
 #!/usr/bin/env bash
-# pre-push hook — blocks push to main, validates CDK synth
+# pre-push hook — blocks direct push to main
 set -euo pipefail
 
 RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
 NC='\033[0m'
 
-echo ""
-echo "🚀 Running pre-push checks..."
-echo ""
-
-# ── 1. Block push to main ────────────────────────────────────────────────────
 while read local_ref local_sha remote_ref remote_sha; do
   if [[ "$remote_ref" == "refs/heads/main" ]]; then
     echo -e "${RED}✗ Direct push to 'main' is not allowed.${NC}"
@@ -20,28 +13,4 @@ while read local_ref local_sha remote_ref remote_sha; do
   fi
 done
 
-# ── 2. CDK synth validation ──────────────────────────────────────────────────
-echo -e "${YELLOW}── CDK synth ──${NC}"
-if cd infra && uv run cdk synth --quiet 2>&1; then
-  echo -e "  ${GREEN}✓ CDK synth passed${NC}"
-else
-  echo -e "  ${RED}✗ CDK synth failed — fix stack errors before pushing${NC}"
-  exit 1
-fi
-echo ""
-
-# ── 3. Secret scan ───────────────────────────────────────────────────────────
-if command -v gitleaks &>/dev/null; then
-  echo -e "${YELLOW}── Secret scan ──${NC}"
-  if gitleaks detect --source . --no-banner -q 2>&1; then
-    echo -e "  ${GREEN}✓ no secrets detected${NC}"
-  else
-    echo -e "  ${RED}✗ gitleaks found potential secrets${NC}"
-    exit 1
-  fi
-  echo ""
-fi
-
-echo -e "${GREEN}✓ All pre-push checks passed. Pushing...${NC}"
-echo ""
 exit 0

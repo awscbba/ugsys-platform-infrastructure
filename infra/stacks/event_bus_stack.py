@@ -17,23 +17,24 @@ class EventBusStack(cdk.Stack):
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
-        # ── Custom Event Bus ──────────────────────────────────────────────────
         self.bus = events.EventBus(
             self,
             "UgsysPlatformBus",
             event_bus_name="ugsys-platform-bus",
         )
 
-        # ── Archive: retain all events for 30 days (replay / debugging) ──────
+        # Match.prefix() returns a CDK token list — valid at synth time.
+        # type: ignore bypasses the overly strict typeguard Sequence[str] check.
         self.bus.archive(
             "UgsysPlatformBusArchive",
             archive_name="ugsys-platform-bus-archive",
             description="30-day archive of all ugsys platform events",
-            event_pattern=events.EventPattern(source=[events.Match.prefix("ugsys.")]),
+            event_pattern=events.EventPattern(
+                source=events.Match.prefix("ugsys."),  # type: ignore[arg-type]
+            ),
             retention=cdk.Duration.days(30),
         )
 
-        # ── CloudWatch log group for event debugging ──────────────────────────
         logs.LogGroup(
             self,
             "UgsysBusLogs",
@@ -42,7 +43,6 @@ class EventBusStack(cdk.Stack):
             removal_policy=cdk.RemovalPolicy.DESTROY,
         )
 
-        # ── Outputs ───────────────────────────────────────────────────────────
         cdk.CfnOutput(
             self,
             "EventBusName",
