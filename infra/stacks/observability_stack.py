@@ -7,6 +7,7 @@ Aggregates metrics from all ugsys services into a single ops dashboard.
 import aws_cdk as cdk
 import aws_cdk.aws_cloudwatch as cw
 import aws_cdk.aws_events as events
+import aws_cdk.aws_kms as kms
 import aws_cdk.aws_logs as logs
 from constructs import Construct
 
@@ -19,6 +20,7 @@ class ObservabilityStack(cdk.Stack):
         scope: Construct,
         construct_id: str,
         event_bus: events.EventBus,
+        kms_key: kms.IKey,
         **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
@@ -37,6 +39,7 @@ class ObservabilityStack(cdk.Stack):
                 self,
                 f"LogGroup-{svc}",
                 log_group_name=f"/ugsys/{svc}/api",
+                encryption_key=kms_key,
                 retention=logs.RetentionDays.ONE_MONTH,
                 removal_policy=cdk.RemovalPolicy.DESTROY,
             )
@@ -48,7 +51,6 @@ class ObservabilityStack(cdk.Stack):
             dashboard_name="ugsys-platform",
         )
 
-        # EventBridge metrics widget
         dashboard.add_widgets(
             cw.TextWidget(
                 markdown="# ugsys Platform — Operations Dashboard",
