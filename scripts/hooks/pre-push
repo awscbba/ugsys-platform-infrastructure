@@ -22,7 +22,7 @@ done
 
 # ── 2. CDK synth validation ──────────────────────────────────────────────────
 echo -e "${YELLOW}── CDK synth ──${NC}"
-if uv run --directory infra cdk synth --quiet 2>&1; then
+if cd infra && uv run cdk synth --quiet 2>&1; then
   echo -e "  ${GREEN}✓ CDK synth passed${NC}"
 else
   echo -e "  ${RED}✗ CDK synth failed — fix stack errors before pushing${NC}"
