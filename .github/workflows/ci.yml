@@ -150,9 +150,9 @@ jobs:
           fetch-depth: 0
 
       - name: Gitleaks secret scan
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.18.4/gitleaks_8.18.4_linux_x64.tar.gz | tar -xz -C /usr/local/bin gitleaks
+          gitleaks detect --source . --no-banner --redact -v
 
   # ============================================================
   # Slack notifications
@@ -164,6 +164,7 @@ jobs:
     if: failure() && github.event_name == 'pull_request'
     steps:
       - name: Send Slack notification
+        continue-on-error: true
         uses: slackapi/slack-github-action@v1.26.0
         with:
           payload: |
