@@ -1,0 +1,164 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "*.md"
+      - ".gitignore"
+
+  # Allow manual deploy with optional env override
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: false
+        default: "prod"
+        type: choice
+        options: [prod, dev]
+
+env:
+  PYTHON_VERSION: "3.13"
+  NODE_VERSION: "20"
+  AWS_REGION: "us-east-1"
+  CDK_ENV: ${{ github.event.inputs.environment || 'prod' }}
+
+permissions:
+  id-token: write   # required for OIDC
+  contents: read
+
+jobs:
+  # ============================================================
+  # Diff — always runs, shows what will change
+  # ============================================================
+  diff:
+    name: CDK Diff (${{ github.event.inputs.environment || 'prod' }})
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Install CDK
+        run: npm install -g aws-cdk
+
+      - name: CDK diff
+        run: |
+          uv run cdk diff --app "python infra/app.py"             --context env=${{ env.CDK_ENV }}             --context account=${{ secrets.AWS_ACCOUNT_ID }}             --context region=${{ env.AWS_REGION }}             --all 2>&1 || true
+        # || true — diff exits 1 when there are changes, which is expected
+
+  # ============================================================
+  # Deploy — runs after diff, requires manual approval on prod
+  # ============================================================
+  deploy:
+    name: CDK Deploy (${{ github.event.inputs.environment || 'prod' }})
+    runs-on: ubuntu-latest
+    needs: [diff]
+    environment: ${{ github.event.inputs.environment || 'prod' }}  # triggers required reviewers
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Install CDK
+        run: npm install -g aws-cdk
+
+      - name: CDK deploy
+        run: |
+          uv run cdk deploy --app "python infra/app.py"             --context env=${{ env.CDK_ENV }}             --context account=${{ secrets.AWS_ACCOUNT_ID }}             --context region=${{ env.AWS_REGION }}             --all             --require-approval never             --outputs-file cdk-outputs.json
+
+      - name: Upload CDK outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: cdk-outputs-${{ env.CDK_ENV }}
+          path: cdk-outputs.json
+          retention-days: 30
+
+  # ============================================================
+  # Notify
+  # ============================================================
+  notify:
+    name: Notify
+    runs-on: ubuntu-latest
+    needs: [deploy]
+    if: always()
+    steps:
+      - name: Slack — success
+        if: needs.deploy.result == 'success'
+        continue-on-error: true
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {"type": "plain_text", "text": "✅ Deploy succeeded — ugsys-platform-infrastructure", "emoji": true}
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    {"type": "mrkdwn", "text": "*Env:*\n${{ env.CDK_ENV }}"},
+                    {"type": "mrkdwn", "text": "*By:*\n${{ github.actor }}"}
+                  ]
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+
+      - name: Slack — failure
+        if: needs.deploy.result != 'success'
+        continue-on-error: true
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {"type": "plain_text", "text": "❌ Deploy failed — ugsys-platform-infrastructure", "emoji": true}
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    {"type": "mrkdwn", "text": "*Env:*\n${{ env.CDK_ENV }}"},
+                    {"type": "mrkdwn", "text": "*Run:*\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View logs>"}
+                  ]
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
