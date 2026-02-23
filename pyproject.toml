@@ -1,0 +1,32 @@
+[project]
+name = "ugsys-platform-infrastructure"
+version = "0.1.0"
+description = "Shared AWS infrastructure for the ugsys platform (EventBridge, Route53, OIDC, KMS, Observability)"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "aws-cdk-lib>=2.150.0",
+    "constructs>=10.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.4.0",
+    "pytest>=8.0.0",
+]
+
+[tool.uv]
+# uv manages the venv at the root — all CDK commands run from here
+package = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
