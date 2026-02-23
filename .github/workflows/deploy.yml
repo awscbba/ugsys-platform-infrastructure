@@ -69,7 +69,7 @@ jobs:
     name: CDK Deploy (${{ github.event.inputs.environment || 'prod' }})
     runs-on: ubuntu-latest
     needs: [diff]
-    # environment: prod  # uncomment + configure required reviewers in GitHub Settings → Environments
+    environment: ${{ github.event.inputs.environment || 'prod' }}
     steps:
       - uses: actions/checkout@v4
 

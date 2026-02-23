@@ -63,11 +63,11 @@ class GithubOidcStack(cdk.Stack):
                     provider.open_id_connect_provider_arn,
                     conditions={
                         "StringLike": {
-                            # Allow any ref in the repo (push, workflow_dispatch, rerun, etc.)
-                            # Tighten to specific branches once pipelines are stable
-                            "token.actions.githubusercontent.com:sub": (
-                                f"repo:{GITHUB_ORG}/{repo}:*"
-                            )
+                            # Allow main branch pushes and prod environment deployments
+                            "token.actions.githubusercontent.com:sub": [
+                                f"repo:{GITHUB_ORG}/{repo}:ref:refs/heads/main",
+                                f"repo:{GITHUB_ORG}/{repo}:environment:prod",
+                            ]
                         },
                         "StringEquals": {
                             "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
