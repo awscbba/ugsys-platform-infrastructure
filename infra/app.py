@@ -3,11 +3,11 @@
 ugsys Platform Infrastructure CDK App.
 
 Stacks:
-  - EventBusStack       → Shared EventBridge custom bus
-  - DnsStack            → Route53 hosted zone (cbba.cloud.org.bo)
-  - GithubOidcStack     → OIDC provider for GitHub Actions (all repos)
-  - SecurityStack       → Shared KMS key
-  - ObservabilityStack  → Centralized CloudWatch dashboards + alarms
+  - SecurityStack       -> Shared KMS key
+  - EventBusStack       -> Shared EventBridge custom bus
+  - DnsStack            -> Route53 hosted zone (cbba.cloud.org.bo)
+  - GithubOidcStack     -> OIDC provider for GitHub Actions (all repos)
+  - ObservabilityStack  -> Centralized CloudWatch dashboards + alarms
 """
 
 import sys
@@ -51,9 +51,11 @@ security_stack = SecurityStack(
 event_bus_stack = EventBusStack(
     app,
     f"UgsysPlatformEventBus-{env_name}",
+    kms_key=security_stack.platform_key,
     env=aws_env,
     tags=tags,
 )
+event_bus_stack.add_dependency(security_stack)
 
 dns_stack = DnsStack(
     app,
@@ -73,9 +75,11 @@ observability_stack = ObservabilityStack(
     app,
     f"UgsysPlatformObservability-{env_name}",
     event_bus=event_bus_stack.bus,
+    kms_key=security_stack.platform_key,
     env=aws_env,
     tags=tags,
 )
 observability_stack.add_dependency(event_bus_stack)
+observability_stack.add_dependency(security_stack)
 
 app.synth()
