@@ -1,20 +1,20 @@
 """
-DnsStack — Route53 hosted zone for awsugcbba.org.
+DnsStack — Route53 hosted zone for cbba.cloud.org.bo.
 
 Each service gets a subdomain:
-  identity.awsugcbba.org
-  projects.awsugcbba.org
-  messaging.awsugcbba.org
-  omnichannel.awsugcbba.org
-  admin.awsugcbba.org
-  api.awsugcbba.org  (public API gateway)
+  identity.cbba.cloud.org.bo
+  projects.cbba.cloud.org.bo
+  messaging.cbba.cloud.org.bo
+  omnichannel.cbba.cloud.org.bo
+  admin.cbba.cloud.org.bo
+  api.cbba.cloud.org.bo  (public API gateway)
 """
 
 import aws_cdk as cdk
 import aws_cdk.aws_route53 as route53
 from constructs import Construct
 
-DOMAIN = "awsugcbba.org"
+DOMAIN = "cbba.cloud.org.bo"
 
 SUBDOMAINS = [
     "identity",

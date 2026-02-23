@@ -4,7 +4,7 @@ ugsys Platform Infrastructure CDK App.
 
 Stacks:
   - EventBusStack       → Shared EventBridge custom bus
-  - DnsStack            → Route53 hosted zone (awsugcbba.org)
+  - DnsStack            → Route53 hosted zone (cbba.cloud.org.bo)
   - GithubOidcStack     → OIDC provider for GitHub Actions (all repos)
   - SecurityStack       → Shared KMS key
   - ObservabilityStack  → Centralized CloudWatch dashboards + alarms
