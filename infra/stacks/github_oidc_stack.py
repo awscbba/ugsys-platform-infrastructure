@@ -6,6 +6,7 @@ No long-lived AWS credentials needed in any repo.
 
 Repos covered:
   awscbba/ugsys-identity-manager
+  awscbba/ugsys-user-profile-service
   awscbba/ugsys-admin-panel
   awscbba/ugsys-projects-registry
   awscbba/ugsys-mass-messaging
@@ -23,6 +24,7 @@ GITHUB_OIDC_URL = "https://token.actions.githubusercontent.com"
 
 REPOS = [
     "ugsys-identity-manager",
+    "ugsys-user-profile-service",
     "ugsys-admin-panel",
     "ugsys-projects-registry",
     "ugsys-mass-messaging",

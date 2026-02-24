@@ -24,6 +24,7 @@ from stacks.github_oidc_stack import GithubOidcStack
 from stacks.identity_manager_stack import IdentityManagerStack
 from stacks.observability_stack import ObservabilityStack
 from stacks.security_stack import SecurityStack
+from stacks.user_profile_service_stack import UserProfileServiceStack
 
 app = cdk.App()
 
@@ -92,5 +93,15 @@ identity_manager_stack = IdentityManagerStack(
     tags=tags,
 )
 identity_manager_stack.add_dependency(security_stack)
+
+user_profile_service_stack = UserProfileServiceStack(
+    app,
+    f"UgsysUserProfileService-{env_name}",
+    env_name=env_name,
+    platform_key=security_stack.platform_key,
+    env=aws_env,
+    tags=tags,
+)
+user_profile_service_stack.add_dependency(security_stack)
 
 app.synth()
