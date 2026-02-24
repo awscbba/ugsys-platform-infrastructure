@@ -21,6 +21,7 @@ import aws_cdk as cdk
 from stacks.dns_stack import DnsStack
 from stacks.event_bus_stack import EventBusStack
 from stacks.github_oidc_stack import GithubOidcStack
+from stacks.identity_manager_stack import IdentityManagerStack
 from stacks.observability_stack import ObservabilityStack
 from stacks.security_stack import SecurityStack
 
@@ -81,5 +82,15 @@ observability_stack = ObservabilityStack(
 )
 observability_stack.add_dependency(event_bus_stack)
 observability_stack.add_dependency(security_stack)
+
+identity_manager_stack = IdentityManagerStack(
+    app,
+    f"UgsysIdentityManager-{env_name}",
+    env_name=env_name,
+    platform_key=security_stack.platform_key,
+    env=aws_env,
+    tags=tags,
+)
+identity_manager_stack.add_dependency(security_stack)
 
 app.synth()
