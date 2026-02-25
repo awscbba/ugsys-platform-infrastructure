@@ -8,15 +8,16 @@ inclusion: always
 
 AWS User Group Cbba — a 5-microservice platform for the community at `cbba.cloud.org.bo`.
 
-## The 5 Services
+## The 6 Services
 
 | Repo | Purpose | Status |
 |------|---------|--------|
-| `ugsys-identity-manager` | Centralized auth, users, RBAC | 🔨 Phase 0 scaffold |
+| `ugsys-identity-manager` | Centralized auth, users, RBAC | 🔨 Phase 1 — partial |
+| `ugsys-user-profile-service` | User profiles, preferences, avatars | 🔨 Phase 1 — partial |
 | `ugsys-projects-registry` | Project catalog, volunteer enrollment, dynamic forms | ⏳ Pending |
 | `ugsys-omnichannel-service` | Multi-channel messaging (SES, SNS, WhatsApp, Slack, Telegram) | ⏳ Pending |
 | `ugsys-mass-messaging` | Campaign orchestration, audiences, analytics | ⏳ Pending |
-| `ugsys-admin-panel` | Plugin-based unified admin UI (Astro + React) | ⏳ Pending |
+| `ugsys-admin-panel` | Plugin-based unified admin UI (React SPA + BFF proxy) | ⏳ Pending |
 
 ## Supporting Repos
 
