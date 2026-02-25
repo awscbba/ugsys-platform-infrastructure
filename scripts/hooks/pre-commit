@@ -1,71 +1,45 @@
 #!/usr/bin/env bash
-# pre-commit hook — lint, CDK synth, secret scan, block commits to main
 set -euo pipefail
-
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m'
-
-echo ""
-echo "🔍 Running pre-commit checks..."
-echo ""
-
+RED='\033[0;31m' GREEN='\033[0;32m' YELLOW='\033[1;33m' NC='\033[0m'
+echo "" && echo "🔍 Running pre-commit checks..." && echo ""
 BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null || echo "")
 if [[ "$BRANCH" == "main" ]]; then
-  echo -e "${RED}✗ Direct commits to 'main' are not allowed.${NC}"
-  echo "  Create a feature branch: git checkout -b feature/your-feature"
-  exit 1
+  echo -e "${RED}✗ Direct commits to 'main' are not allowed.${NC}"; exit 1
 fi
-
 FAILED=0
 STAGED=$(git diff --cached --name-only)
-
 if echo "$STAGED" | grep -q "^infra/"; then
-  echo -e "${YELLOW}── Ruff lint (stacks/) ──${NC}"
-  if uv tool run ruff check infra/stacks/ --quiet 2>&1; then
+  echo -e "${YELLOW}── Ruff lint ──${NC}"
+  if just lint --quiet 2>&1; then
     echo -e "  ${GREEN}✓ ruff lint${NC}"
   else
-    echo -e "  ${RED}✗ ruff lint failed — run: just lint${NC}"
-    FAILED=1
+    echo -e "  ${RED}✗ ruff lint failed — run: just lint${NC}"; FAILED=1
   fi
-
-  echo -e "${YELLOW}── Ruff format check ──${NC}"
-  if uv tool run ruff format --check infra/stacks/ --quiet 2>&1; then
+  echo -e "${YELLOW}── Ruff format ──${NC}"
+  if just format-check --quiet 2>&1; then
     echo -e "  ${GREEN}✓ ruff format${NC}"
   else
-    echo -e "  ${RED}✗ ruff format failed — run: just format${NC}"
-    FAILED=1
+    echo -e "  ${RED}✗ ruff format failed — run: just format${NC}"; FAILED=1
   fi
-
   echo -e "${YELLOW}── CDK synth ──${NC}"
   REPO_ROOT=$(git rev-parse --show-toplevel)
   if (cd "$REPO_ROOT/infra" && JSII_SILENCE_WARNING_UNTESTED_NODE_VERSION=1 uv run cdk synth --quiet 2>&1); then
-    echo -e "  ${GREEN}✓ CDK synth passed${NC}"
+    echo -e "  ${GREEN}✓ CDK synth${NC}"
   else
-    echo -e "  ${RED}✗ CDK synth failed — fix stack errors before committing${NC}"
-    FAILED=1
+    echo -e "  ${RED}✗ CDK synth failed${NC}"; FAILED=1
   fi
 else
-  echo -e "${GREEN}✓ No infra changes staged — skipping lint and synth.${NC}"
+  echo -e "${GREEN}✓ No infra changes staged — skipping checks.${NC}"
 fi
-
 if command -v gitleaks &>/dev/null; then
   echo -e "${YELLOW}── Secret scan ──${NC}"
   if gitleaks detect --source . --no-banner -q 2>&1; then
     echo -e "  ${GREEN}✓ no secrets detected${NC}"
   else
-    echo -e "  ${RED}✗ gitleaks found potential secrets${NC}"
-    FAILED=1
+    echo -e "  ${RED}✗ gitleaks found potential secrets${NC}"; FAILED=1
   fi
 fi
-
 echo ""
-if [ $FAILED -ne 0 ]; then
-  echo -e "${RED}✗ Pre-commit checks failed.${NC}"
-  exit 1
-fi
-
-echo -e "${GREEN}✓ All pre-commit checks passed.${NC}"
-echo ""
+if [ $FAILED -ne 0 ]; then echo -e "${RED}✗ Pre-commit checks failed.${NC}"; exit 1; fi
+echo -e "${GREEN}✓ All pre-commit checks passed.${NC}" && echo ""
 exit 0
