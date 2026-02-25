@@ -389,6 +389,124 @@ Log `duration_ms` on every application service method. This feeds CloudWatch Log
 
 ---
 
+## 9. Test-Driven Development (mandatory workflow)
+
+**Tests come FIRST. Code comes second.** Every feature follows the Red → Green → Refactor cycle:
+
+### The TDD Cycle
+
+```
+1. RED    — Write a failing test that defines the expected behavior
+2. GREEN  — Write the MINIMUM code to make the test pass
+3. REFACTOR — Clean up the code while keeping tests green
+4. REPEAT — Next small behavior, next test
+```
+
+### Workflow per feature unit
+
+```
+# Step 1: Write the test FIRST (it will fail — that's correct)
+→ tests/unit/domain/test_user.py::test_user_creation_sets_defaults
+
+# Step 2: Run it — confirm it fails (RED)
+→ uv run pytest tests/unit/domain/test_user.py -v
+
+# Step 3: Write ONLY enough code to pass (GREEN)
+→ src/domain/entities/user.py
+
+# Step 4: Run it — confirm it passes (GREEN)
+→ uv run pytest tests/unit/domain/test_user.py -v
+
+# Step 5: Refactor if needed, run tests again
+→ uv run pytest tests/unit/ -v
+
+# Step 6: Next behavior — back to Step 1
+```
+
+### What "one unit" means — test each in isolation
+
+| Layer | One unit = | Test file |
+|-------|-----------|-----------|
+| Domain | One entity behavior, one value object rule | `tests/unit/domain/` |
+| Application | One service method, one use case | `tests/unit/application/` |
+| Presentation | One endpoint, one middleware behavior | `tests/unit/presentation/` |
+| Infrastructure | One repository method (integration) | `tests/integration/` |
+
+### TDD example — domain entity
+
+```python
+# STEP 1: Write test FIRST
+# tests/unit/domain/test_user.py
+def test_user_creation_sets_active_status() -> None:
+    user = User(email="dev@example.com", full_name="Test User")
+    assert user.is_active is True
+    assert user.created_at is not None
+
+# STEP 2: Run → RED (User doesn't exist yet)
+# STEP 3: Implement ONLY what the test needs
+# src/domain/entities/user.py
+@dataclass
+class User:
+    email: str
+    full_name: str
+    is_active: bool = True
+    created_at: datetime = field(default_factory=datetime.utcnow)
+
+# STEP 4: Run → GREEN
+```
+
+### TDD example — application service
+
+```python
+# STEP 1: Write test FIRST
+# tests/unit/application/test_register_user.py
+async def test_register_user_saves_and_returns_user() -> None:
+    # Arrange
+    repo = AsyncMock(spec=UserRepository)
+    repo.find_by_email.return_value = None
+    repo.save.return_value = make_user(email="dev@example.com")
+    service = RegisterUserService(repo)
+
+    # Act
+    result = await service.execute(RegisterUserCommand(email="dev@example.com", full_name="Dev"))
+
+    # Assert
+    repo.save.assert_called_once()
+    assert result.email == "dev@example.com"
+
+# STEP 2: Run → RED (RegisterUserService doesn't exist yet)
+# STEP 3: Implement ONLY the happy path
+# STEP 4: Run → GREEN
+# STEP 5: Next test — what if email already exists? → ConflictError test → implement
+```
+
+### Mandatory rules
+
+- **NEVER write implementation code without a failing test first**
+- **NEVER write more than ONE test before making it pass** — one RED at a time
+- **NEVER skip running tests** — run after every change, no exceptions
+- **NEVER implement multiple behaviors at once** — one test, one behavior, one cycle
+- **Fix failures immediately** — if a test breaks, stop and fix it before writing anything else
+
+### Anti-patterns
+
+- ❌ Writing 5 files then running tests for the first time
+- ❌ Implementing all endpoints before testing any
+- ❌ "I'll add tests later" — the test MUST exist before the code
+- ❌ Writing a test that passes immediately — if it's green on first run, you wrote the code first
+- ❌ Skipping the RED step — seeing the test fail confirms it actually tests something
+
+### When to run tests
+
+| After... | Run |
+|----------|-----|
+| Writing a new test | `uv run pytest path/to/test_file.py::test_name -v` (expect RED) |
+| Writing implementation | `uv run pytest path/to/test_file.py::test_name -v` (expect GREEN) |
+| Refactoring | `uv run pytest tests/unit/ -v` (all must stay GREEN) |
+| Before commit | `uv run pytest tests/unit/ -v --tb=short` (full suite) |
+
+---
+
 ## Summary Checklist (before every PR)
 
 ```
@@ -398,6 +516,7 @@ Log `duration_ms` on every application service method. This feeds CloudWatch Log
 □ create_app() factory pattern — configure_logging() called first
 □ Each router handles ONE domain — no cross-domain service injection
 □ Ubiquitous language consistent — entity names match the domain table above
+□ TDD workflow followed — every implementation has a test that was written FIRST
 □ Tests follow AAA — Arrange / Act / Assert
 □ Tests verify user_message safety — no PII or internals in client-facing message
 □ duration_ms logged on all application service methods

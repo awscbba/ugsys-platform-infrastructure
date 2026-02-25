@@ -1,0 +1,17 @@
+{
+  "enabled": true,
+  "name": "CDK — Synth After Stack Changes",
+  "description": "After editing CDK stack files, run cdk synth to validate the CloudFormation output. Also runs any CDK tests if present.",
+  "version": "1",
+  "when": {
+    "type": "fileEdited",
+    "patterns": [
+      "**/infra/**/*.py",
+      "**/tests/**/*.py"
+    ]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "You just edited a CDK infrastructure file. Validate the change:\n\n1. If you edited a STACK file (infra/stacks/*.py or infra/app.py): run `uv run cdk synth --quiet` using cwd set to `ugsys-platform-infrastructure/infra` to verify the CloudFormation template generates without errors.\n\n2. If you edited a TEST file: run it with `uv run pytest <test_file> -v` using cwd set to `ugsys-platform-infrastructure` — verify it passes.\n\n3. If cdk synth fails, fix the error NOW before writing more code.\n\nAlways use cwd pointing to the correct directory within ugsys-platform-infrastructure."
+  }
+}
