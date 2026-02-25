@@ -3,6 +3,8 @@ IdentityManagerStack — Lambda + API Gateway + DynamoDB + CloudWatch for ugsys-
 
 Resources:
   - DynamoDB table: ugsys-identity-manager-users-{env}
+  - DynamoDB table: ugsys-identity-{env}-token-blacklist  (JWT revocation, TTL-enabled)
+  - Secrets Manager secret: ugsys-identity-manager-jwt-secret-{env}
   - Lambda function: ugsys-identity-manager-{env}
   - API Gateway HTTP API: ugsys-identity-manager-{env}
   - CloudWatch Log Group (KMS-encrypted)
@@ -17,6 +19,7 @@ import aws_cdk.aws_iam as iam
 import aws_cdk.aws_kms as kms
 import aws_cdk.aws_lambda as lambda_
 import aws_cdk.aws_logs as logs
+import aws_cdk.aws_secretsmanager as secretsmanager
 from constructs import Construct
 
 
@@ -57,6 +60,42 @@ class IdentityManagerStack(cdk.Stack):
             projection_type=dynamodb.ProjectionType.ALL,
         )
 
+        # ── DynamoDB — Token blacklist table ──────────────────────────────────
+        # Stores revoked JWT JTIs. TTL attribute auto-expires entries at token expiry.
+        # Table name matches config.py: ugsys-identity-{env}-token-blacklist
+        self.token_blacklist_table = dynamodb.Table(
+            self,
+            "TokenBlacklistTable",
+            table_name=f"ugsys-identity-{env_name}-token-blacklist",
+            partition_key=dynamodb.Attribute(name="jti", type=dynamodb.AttributeType.STRING),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            encryption=dynamodb.TableEncryption.AWS_MANAGED,
+            time_to_live_attribute="ttl",
+            removal_policy=(
+                cdk.RemovalPolicy.RETAIN if env_name == "prod" else cdk.RemovalPolicy.DESTROY
+            ),
+        )
+
+        # ── Secrets Manager — JWT signing secret ──────────────────────────────
+        # Auto-generates a cryptographically secure random string (64 hex chars = 256 bits).
+        # Lambda reads this at cold-start via the JWT_SECRET_KEY env var.
+        jwt_secret = secretsmanager.Secret(
+            self,
+            "JwtSecret",
+            secret_name=f"ugsys-identity-manager-jwt-secret-{env_name}",
+            description="JWT HS256 signing secret for ugsys-identity-manager",
+            generate_secret_string=secretsmanager.SecretStringGenerator(
+                secret_string_template="{}",
+                generate_string_key="jwt_secret_key",
+                password_length=64,
+                exclude_punctuation=True,  # alphanumeric only — safe in env vars
+            ),
+            encryption_key=platform_key,
+            removal_policy=(
+                cdk.RemovalPolicy.RETAIN if env_name == "prod" else cdk.RemovalPolicy.DESTROY
+            ),
+        )
+
         # ── CloudWatch Log Group (KMS-encrypted) ──────────────────────────────
         log_group = logs.LogGroup(
             self,
@@ -83,10 +122,10 @@ class IdentityManagerStack(cdk.Stack):
             )
         )
 
-        # DynamoDB access — scoped to this table only
+        # DynamoDB access — users table
         execution_role.add_to_policy(
             iam.PolicyStatement(
-                sid="DynamoDBAccess",
+                sid="DynamoDBUsersAccess",
                 effect=iam.Effect.ALLOW,
                 actions=[
                     "dynamodb:GetItem",
@@ -103,7 +142,22 @@ class IdentityManagerStack(cdk.Stack):
             )
         )
 
-        # KMS — allow Lambda to use the platform key for DynamoDB/logs
+        # DynamoDB access — token blacklist table
+        execution_role.add_to_policy(
+            iam.PolicyStatement(
+                sid="DynamoDBTokenBlacklistAccess",
+                effect=iam.Effect.ALLOW,
+                actions=[
+                    "dynamodb:GetItem",
+                    "dynamodb:PutItem",
+                    "dynamodb:DeleteItem",
+                    "dynamodb:Query",
+                ],
+                resources=[self.token_blacklist_table.table_arn],
+            )
+        )
+
+        # KMS — allow Lambda to use the platform key for DynamoDB/logs/secrets
         execution_role.add_to_policy(
             iam.PolicyStatement(
                 sid="KMSAccess",
@@ -114,6 +168,16 @@ class IdentityManagerStack(cdk.Stack):
                     "kms:DescribeKey",
                 ],
                 resources=[platform_key.key_arn],
+            )
+        )
+
+        # Secrets Manager — read JWT secret only
+        execution_role.add_to_policy(
+            iam.PolicyStatement(
+                sid="SecretsManagerJwtSecret",
+                effect=iam.Effect.ALLOW,
+                actions=["secretsmanager:GetSecretValue"],
+                resources=[jwt_secret.secret_arn],
             )
         )
 
@@ -148,8 +212,14 @@ class IdentityManagerStack(cdk.Stack):
                 "APP_ENV": env_name,
                 "AWS_ACCOUNT_ID": self.account,
                 "DYNAMODB_TABLE_NAME": self.users_table.table_name,
+                "TOKEN_BLACKLIST_TABLE_NAME": self.token_blacklist_table.table_name,
                 "EVENT_BUS_NAME": "ugsys-platform-bus",
                 "LOG_LEVEL": "INFO",
+                "JWT_ALGORITHM": "HS256",
+                # JWT_SECRET_KEY is resolved at Lambda init from Secrets Manager
+                # via the SECRETS_MANAGER_JWT_SECRET_ARN env var below.
+                # The application reads it with boto3 on cold start.
+                "SECRETS_MANAGER_JWT_SECRET_ARN": jwt_secret.secret_arn,
             },
             log_group=log_group,
             tracing=lambda_.Tracing.ACTIVE,
@@ -194,4 +264,17 @@ class IdentityManagerStack(cdk.Stack):
             "UsersTableName",
             value=self.users_table.table_name,
             export_name=f"UgsysIdentityManagerUsersTable-{env_name}",
+        )
+        cdk.CfnOutput(
+            self,
+            "TokenBlacklistTableName",
+            value=self.token_blacklist_table.table_name,
+            export_name=f"UgsysIdentityManagerTokenBlacklistTable-{env_name}",
+        )
+        cdk.CfnOutput(
+            self,
+            "JwtSecretArn",
+            value=jwt_secret.secret_arn,
+            export_name=f"UgsysIdentityManagerJwtSecretArn-{env_name}",
+            description="JWT signing secret ARN — do not log this value",
         )
