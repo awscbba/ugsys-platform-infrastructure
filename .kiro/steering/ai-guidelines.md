@@ -130,15 +130,31 @@ ugsys-auth-client = { git = "https://github.com/awscbba/ugsys-shared-libs", tag 
 2. `typecheck` — mypy strict
 3. `test` — pytest unit tests, 80% coverage gate
 4. `sast` — Bandit
-5. `dependency-scan` — Safety (advisory)
-6. `secret-scan` — Gitleaks
-7. `arch-guard` — grep for layer boundary violations
-8. `notify-failure` — Slack on any failure
+5. `sast-semgrep` — Semgrep (`p/python`, `p/security-audit`, `p/owasp-top-ten`, `p/secrets`)
+6. `dependency-scan` — Safety (advisory)
+7. `sbom` — CycloneDX → Trivy scan (CRITICAL/HIGH, blocks merge)
+8. `secret-scan` — Gitleaks (`fetch-depth: 0`)
+9. `arch-guard` — grep for layer boundary violations
+10. `notify-failure` — Slack on any failure
+
+### `codeql.yml` (PR to `main` + weekly Monday 06:00 UTC)
+- CodeQL Python analysis — `security-extended,security-and-quality`
+- Results to GitHub Security tab (SARIF) — advisory, does not block merge
+
+### `security-scan.yml` (DAST — post-deploy to `main`, also `workflow_dispatch`)
+- OWASP ZAP baseline scan — blocks on FAIL rules (XSS, SQLi, CORS, HSTS, cookie flags)
+- Nuclei scan — blocks on critical findings
+- Slack notification on any finding
 
 ### `deploy.yml` (merge to `main` only)
 - Requires `environment: prod` gate approval
 - OIDC auth — no static AWS keys
 - Slack success/failure notification
+
+### Git hooks (install via `just install-hooks`)
+- `pre-commit`: blocks commits to `main`; ruff lint + format
+- `pre-push`: blocks push to `main`; mypy strict + unit tests
+- Never bypass with `--no-verify`
 
 ## Emergency Procedures
 
