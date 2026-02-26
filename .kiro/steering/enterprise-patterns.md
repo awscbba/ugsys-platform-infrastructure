@@ -7,6 +7,8 @@ inclusion: always
 These rules apply to ALL `ugsys-*` services without exception.
 They complement `architecture.md` (layer structure) and `logging.md` (structlog).
 
+> **Sections 1–9** are mandatory for every service. **Sections 10–13** (Outbox, Unit of Work, Circuit Breaker, Query Object) are enterprise patterns that should be adopted when the service's requirements call for them — not blindly applied. Evaluate each pattern against your service's specific needs: if you have dual-write scenarios, use the Outbox; if you call external services, use the Circuit Breaker; if you have multi-aggregate writes, use the Unit of Work; if your list endpoints have growing filter parameters, use the Query Object.
+
 ---
 
 ## 1. Zero Code Duplication
@@ -215,6 +217,7 @@ configure_logging(settings.service_name, settings.log_level)
 logger = structlog.get_logger()
 
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("startup.begin", service=settings.service_name, version=settings.version)
@@ -351,6 +354,7 @@ async def test_register_user_raises_conflict_when_email_exists() -> None:
 - Test the domain exception type, not the HTTP status code (that's the handler's job)
 - Test `user_message` does NOT contain internal details or PII
 - One `pytest.raises` per test — don't test multiple failure modes in one test
+
 
 ---
 
@@ -505,6 +509,554 @@ async def test_register_user_saves_and_returns_user() -> None:
 | Refactoring | `uv run pytest tests/unit/ -v` (all must stay GREEN) |
 | Before commit | `uv run pytest tests/unit/ -v --tb=short` (full suite) |
 
+
+---
+
+## 10. Outbox Pattern (reliable event delivery)
+
+The Outbox Pattern solves the dual-write problem: when a service must persist state AND publish an event, doing both as separate I/O calls risks partial failure. If the DynamoDB write succeeds but EventBridge publish fails, the system is inconsistent.
+
+Instead of two separate calls, write the domain event to an outbox table in the SAME DynamoDB transaction as the business write. A separate delivery process reads the outbox and publishes to EventBridge.
+
+### When to use vs log-and-continue
+
+| Scenario | Approach |
+|----------|----------|
+| Event loss is acceptable (analytics, notifications) | Log-and-continue |
+| Event loss causes data inconsistency (subscription approved + participant count) | Outbox |
+| Event triggers financial or compliance actions | Outbox |
+| Event is consumed by another service to create/update its own state | Outbox |
+
+### Outbox table schema
+
+```
+Table: ugsys-outbox-{service}-{env}
+PK: OUTBOX#{ulid}
+SK: EVENT
+
+Attributes:
+  id: S (ULID)
+  aggregate_type: S (e.g., "Project", "Subscription")
+  aggregate_id: S (entity ID)
+  event_type: S (e.g., "projects.subscription.approved")
+  payload: S (JSON-serialized event body)
+  created_at: S (ISO 8601)
+  published_at: S | None (set after successful delivery)
+  retry_count: N (default 0)
+  status: S ("pending" | "published" | "failed")
+
+GSI: StatusIndex
+  PK: status
+  SK: created_at
+```
+
+### Transactional write (application service)
+
+```python
+# src/application/services/subscription_service.py
+async def approve_subscription(self, subscription_id: str, admin_id: str) -> Subscription:
+    subscription = await self._subscription_repo.find_by_id(subscription_id)
+    if subscription is None:
+        raise NotFoundError(message=f"Subscription {subscription_id} not found", user_message="Subscription not found")
+
+    subscription.approve(approved_by=admin_id)
+
+    # Single DynamoDB TransactWriteItems — both succeed or both fail
+    await self._unit_of_work.execute([
+        self._subscription_repo.save_operation(subscription),
+        self._outbox_repo.save_operation(OutboxEvent(
+            aggregate_type="Subscription",
+            aggregate_id=str(subscription.id),
+            event_type="projects.subscription.approved",
+            payload=subscription.to_event_payload(),
+        )),
+    ])
+    return subscription
+```
+
+### Outbox delivery process
+
+The delivery process runs on a schedule (EventBridge Scheduler → Lambda, every 1 minute):
+
+```python
+# src/infrastructure/messaging/outbox_processor.py
+import structlog
+from src.domain.repositories.outbox_repository import OutboxRepository
+from src.domain.repositories.event_publisher import EventPublisher
+
+logger = structlog.get_logger()
+
+class OutboxProcessor:
+    def __init__(self, outbox_repo: OutboxRepository, publisher: EventPublisher) -> None:
+        self._outbox_repo = outbox_repo
+        self._publisher = publisher
+
+    async def process_pending(self, batch_size: int = 25) -> int:
+        events = await self._outbox_repo.find_pending(limit=batch_size)
+        published = 0
+        for event in events:
+            try:
+                await self._publisher.publish(event.event_type, event.payload_dict)
+                await self._outbox_repo.mark_published(event.id)
+                published += 1
+            except Exception as e:
+                logger.error("outbox.delivery_failed", event_id=str(event.id), error=str(e))
+                await self._outbox_repo.increment_retry(event.id)
+        return published
+```
+
+### Rules
+
+- Outbox events older than 7 days with status `published` → delete (DynamoDB TTL or scheduled cleanup)
+- Events with `retry_count >= 5` → set status to `failed`, alert via CloudWatch alarm
+- Outbox processor is idempotent — re-publishing the same event is safe (consumers must be idempotent too)
+- Never bypass the outbox by publishing directly when the outbox pattern is in use for that aggregate
+
+
+---
+
+## 11. Unit of Work (transactional consistency)
+
+The Unit of Work pattern groups multiple repository operations into a single atomic transaction. DynamoDB `TransactWriteItems` supports up to 100 operations in one atomic batch.
+
+### When to use
+
+- Approving a subscription AND incrementing the project's participant count
+- Creating a form submission AND updating the project's submission count
+- Any operation that modifies more than one aggregate and must be all-or-nothing
+
+### Port definition (domain layer)
+
+```python
+# src/domain/repositories/unit_of_work.py
+from abc import ABC, abstractmethod
+from typing import Any
+
+class TransactionalOperation:
+    """Represents a single write operation within a transaction."""
+    def __init__(self, operation_type: str, params: dict[str, Any]) -> None:
+        self.operation_type = operation_type  # "Put", "Update", "Delete"
+        self.params = params
+
+class UnitOfWork(ABC):
+    @abstractmethod
+    async def execute(self, operations: list[TransactionalOperation]) -> None:
+        """Execute all operations atomically. All succeed or all fail."""
+        ...
+```
+
+### Infrastructure implementation
+
+```python
+# src/infrastructure/persistence/dynamodb_unit_of_work.py
+import structlog
+from typing import Any
+from botocore.exceptions import ClientError
+from src.domain.repositories.unit_of_work import UnitOfWork, TransactionalOperation
+from src.domain.exceptions import RepositoryError
+
+logger = structlog.get_logger()
+
+class DynamoDBUnitOfWork(UnitOfWork):
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+    async def execute(self, operations: list[TransactionalOperation]) -> None:
+        if not operations:
+            return
+        if len(operations) > 100:
+            raise RepositoryError(
+                message=f"Transaction exceeds DynamoDB limit: {len(operations)} operations",
+                user_message="An unexpected error occurred",
+            )
+
+        transact_items = []
+        for op in operations:
+            transact_items.append({op.operation_type: op.params})
+
+        try:
+            await self._client.transact_write_items(TransactItems=transact_items)
+        except ClientError as e:
+            code = e.response["Error"]["Code"]
+            logger.error(
+                "unit_of_work.transaction_failed",
+                error_code=code,
+                operation_count=len(operations),
+                error=str(e),
+            )
+            if code == "TransactionCanceledException":
+                reasons = e.response.get("CancellationReasons", [])
+                logger.error("unit_of_work.cancellation_reasons", reasons=reasons)
+            raise RepositoryError(
+                message=f"DynamoDB transaction failed: {e}",
+                user_message="An unexpected error occurred",
+            )
+```
+
+### Repository integration
+
+Each repository exposes `*_operation()` methods that return `TransactionalOperation` instead of executing directly:
+
+```python
+# src/infrastructure/persistence/dynamodb_subscription_repository.py
+class DynamoDBSubscriptionRepository(SubscriptionRepository):
+    # ... existing methods ...
+
+    def save_operation(self, subscription: Subscription) -> TransactionalOperation:
+        """Return a transactional Put operation (does not execute)."""
+        return TransactionalOperation(
+            operation_type="Put",
+            params={
+                "TableName": self._table_name,
+                "Item": self._to_item(subscription),
+                "ConditionExpression": "attribute_not_exists(PK)",
+            },
+        )
+
+    def update_operation(self, subscription: Subscription) -> TransactionalOperation:
+        """Return a transactional Put operation for update (does not execute)."""
+        return TransactionalOperation(
+            operation_type="Put",
+            params={
+                "TableName": self._table_name,
+                "Item": self._to_item(subscription),
+                "ConditionExpression": "attribute_exists(PK)",
+            },
+        )
+```
+
+### Rules
+
+- Unit of Work is wired in `main.py` alongside repositories — same DynamoDB client
+- Never mix transactional and non-transactional writes for the same aggregate in the same use case
+- DynamoDB transactions have a 100-operation limit — if you need more, redesign the aggregate boundaries
+- All items in a transaction must be in the same AWS region (DynamoDB limitation)
+- Unit of Work + Outbox Pattern combine naturally: the outbox write is just another operation in the transaction
+
+
+---
+
+## 12. Circuit Breaker (external service resilience)
+
+The Circuit Breaker pattern wraps calls to external services and fast-fails after repeated failures, preventing cascade failures and giving the downstream service time to recover.
+
+### State machine
+
+```
+CLOSED (normal) ──[N consecutive failures]──→ OPEN (fast-fail)
+                                                  │
+                                          [cooldown expires]
+                                                  │
+                                                  ▼
+                                          HALF-OPEN (probe)
+                                                  │
+                                    ┌─────────────┴─────────────┐
+                              [probe succeeds]            [probe fails]
+                                    │                           │
+                                    ▼                           ▼
+                              CLOSED                        OPEN
+```
+
+### Configuration
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `failure_threshold` | 5 | Consecutive failures before opening |
+| `cooldown_seconds` | 30 | Time in OPEN state before probing |
+| `half_open_max_calls` | 1 | Probe calls allowed in HALF-OPEN |
+
+### Port definition (domain layer)
+
+```python
+# src/domain/repositories/circuit_breaker.py
+from abc import ABC, abstractmethod
+from enum import Enum
+
+class CircuitState(Enum):
+    CLOSED = "closed"
+    OPEN = "open"
+    HALF_OPEN = "half_open"
+
+class CircuitBreaker(ABC):
+    @abstractmethod
+    def state(self) -> CircuitState: ...
+
+    @abstractmethod
+    def record_success(self) -> None: ...
+
+    @abstractmethod
+    def record_failure(self) -> None: ...
+
+    @abstractmethod
+    def allow_request(self) -> bool: ...
+```
+
+### Infrastructure implementation
+
+```python
+# src/infrastructure/adapters/in_memory_circuit_breaker.py
+import time
+import structlog
+from src.domain.repositories.circuit_breaker import CircuitBreaker, CircuitState
+
+logger = structlog.get_logger()
+
+class InMemoryCircuitBreaker(CircuitBreaker):
+    def __init__(
+        self,
+        service_name: str,
+        failure_threshold: int = 5,
+        cooldown_seconds: int = 30,
+    ) -> None:
+        self._service_name = service_name
+        self._failure_threshold = failure_threshold
+        self._cooldown_seconds = cooldown_seconds
+        self._state = CircuitState.CLOSED
+        self._failure_count = 0
+        self._last_failure_time: float = 0.0
+
+    def state(self) -> CircuitState:
+        if self._state == CircuitState.OPEN:
+            if time.monotonic() - self._last_failure_time >= self._cooldown_seconds:
+                self._state = CircuitState.HALF_OPEN
+                logger.info("circuit_breaker.half_open", service=self._service_name)
+        return self._state
+
+    def allow_request(self) -> bool:
+        current = self.state()
+        return current in (CircuitState.CLOSED, CircuitState.HALF_OPEN)
+
+    def record_success(self) -> None:
+        if self._state == CircuitState.HALF_OPEN:
+            logger.info("circuit_breaker.closed", service=self._service_name)
+        self._state = CircuitState.CLOSED
+        self._failure_count = 0
+
+    def record_failure(self) -> None:
+        self._failure_count += 1
+        self._last_failure_time = time.monotonic()
+        if self._failure_count >= self._failure_threshold:
+            self._state = CircuitState.OPEN
+            logger.warning(
+                "circuit_breaker.opened",
+                service=self._service_name,
+                failure_count=self._failure_count,
+                cooldown_seconds=self._cooldown_seconds,
+            )
+```
+
+### Usage in adapters
+
+```python
+# src/infrastructure/adapters/identity_manager_client.py
+import structlog
+from src.domain.repositories.identity_client import IdentityClient
+from src.domain.repositories.circuit_breaker import CircuitBreaker
+from src.domain.exceptions import ExternalServiceError
+
+logger = structlog.get_logger()
+
+class IdentityManagerClient(IdentityClient):
+    def __init__(self, base_url: str, circuit_breaker: CircuitBreaker, http_client: Any) -> None:
+        self._base_url = base_url
+        self._cb = circuit_breaker
+        self._http_client = http_client
+
+    async def check_email_exists(self, email: str) -> bool:
+        if not self._cb.allow_request():
+            logger.warning("identity_client.circuit_open", operation="check_email_exists")
+            raise ExternalServiceError(
+                message="Identity Manager circuit breaker is open",
+                user_message="Service temporarily unavailable, please try again later",
+                error_code="SERVICE_UNAVAILABLE",
+            )
+        try:
+            response = await self._http_client.get(f"{self._base_url}/api/v1/users/by-email/{email}")
+            self._cb.record_success()
+            return response.status_code == 200
+        except Exception as e:
+            self._cb.record_failure()
+            raise ExternalServiceError(
+                message=f"Identity Manager call failed: {e}",
+                user_message="Service temporarily unavailable, please try again later",
+                error_code="EXTERNAL_SERVICE_ERROR",
+            )
+```
+
+### Rules
+
+- One circuit breaker instance per external service — wired in `main.py`
+- Circuit breaker is in-memory (Lambda cold starts reset it — acceptable for serverless)
+- Log every state transition (`closed → open`, `open → half_open`, `half_open → closed`)
+- Never use circuit breaker for DynamoDB calls — those are handled by repository error wrapping
+- Services that use circuit breaker: `IdentityManagerClient`, `EventBridgePublisher` (when not using outbox)
+
+
+---
+
+## 13. Specification / Query Object (composable filters)
+
+The Specification pattern encapsulates query criteria as first-class objects. This prevents `list_paginated()` from growing unbounded parameters as new filter combinations appear.
+
+### The problem
+
+```python
+# ❌ NEVER — parameter explosion
+async def list_paginated(
+    self, page: int, page_size: int,
+    status_filter: str | None = None,
+    category_filter: str | None = None,
+    owner_filter: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    search_term: str | None = None,
+    sort_by: str | None = None,
+    sort_order: str | None = None,
+) -> tuple[list[Project], int]: ...
+```
+
+### The solution — query object
+
+```python
+# src/application/queries/project_queries.py
+from dataclasses import dataclass, field
+
+@dataclass(frozen=True)
+class ProjectListQuery:
+    """Encapsulates all filter/sort/pagination criteria for project listing."""
+    page: int = 1
+    page_size: int = 20
+    status: str | None = None
+    category: str | None = None
+    owner_id: str | None = None
+    date_from: str | None = None
+    date_to: str | None = None
+    search_term: str | None = None
+    sort_by: str = "created_at"
+    sort_order: str = "desc"
+    tags: list[str] = field(default_factory=list)
+
+    def has_filters(self) -> bool:
+        return any([
+            self.status, self.category, self.owner_id,
+            self.date_from, self.date_to, self.search_term, self.tags,
+        ])
+```
+
+### Repository port uses the query object
+
+```python
+# src/domain/repositories/project_repository.py
+from abc import ABC, abstractmethod
+from src.domain.entities.project import Project
+
+class ProjectRepository(ABC):
+    @abstractmethod
+    async def save(self, project: Project) -> Project: ...
+
+    @abstractmethod
+    async def find_by_id(self, project_id: str) -> Project | None: ...
+
+    @abstractmethod
+    async def list_by_query(self, query: "ProjectListQuery") -> tuple[list[Project], int]:
+        """List projects matching the query criteria with total count."""
+        ...
+```
+
+### Infrastructure implementation
+
+```python
+# src/infrastructure/persistence/dynamodb_project_repository.py
+class DynamoDBProjectRepository(ProjectRepository):
+    async def list_by_query(self, query: ProjectListQuery) -> tuple[list[Project], int]:
+        try:
+            if query.status:
+                # Use GSI StatusIndex for status-based queries
+                response = await self._client.query(
+                    TableName=self._table_name,
+                    IndexName="StatusIndex",
+                    KeyConditionExpression="GSI1PK = :status",
+                    ExpressionAttributeValues={":status": {"S": f"STATUS#{query.status}"}},
+                )
+            else:
+                # Scan with filter expressions for complex queries
+                filter_parts, expr_values = self._build_filter_expression(query)
+                scan_params = {"TableName": self._table_name}
+                if filter_parts:
+                    scan_params["FilterExpression"] = " AND ".join(filter_parts)
+                    scan_params["ExpressionAttributeValues"] = expr_values
+                response = await self._client.scan(**scan_params)
+
+            items = response.get("Items", [])
+            projects = [self._from_item(item) for item in items]
+
+            # Apply in-memory sorting and pagination
+            projects.sort(
+                key=lambda p: getattr(p, query.sort_by, p.created_at),
+                reverse=(query.sort_order == "desc"),
+            )
+            total = len(projects)
+            start = (query.page - 1) * query.page_size
+            page_items = projects[start : start + query.page_size]
+            return page_items, total
+        except ClientError as e:
+            self._raise_repository_error("list_by_query", e)
+
+    def _build_filter_expression(self, query: ProjectListQuery) -> tuple[list[str], dict]:
+        parts: list[str] = []
+        values: dict = {}
+        if query.category:
+            parts.append("category = :cat")
+            values[":cat"] = {"S": query.category}
+        if query.owner_id:
+            parts.append("owner_id = :owner")
+            values[":owner"] = {"S": query.owner_id}
+        if query.date_from:
+            parts.append("created_at >= :date_from")
+            values[":date_from"] = {"S": query.date_from}
+        if query.date_to:
+            parts.append("created_at <= :date_to")
+            values[":date_to"] = {"S": query.date_to}
+        return parts, values
+```
+
+### Presentation layer — query params to query object
+
+```python
+# src/presentation/api/v1/projects.py
+from fastapi import APIRouter, Depends, Query
+from src.application.queries.project_queries import ProjectListQuery
+
+router = APIRouter(prefix="/projects", tags=["Projects"])
+
+@router.get("/")
+async def list_projects(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    status: str | None = Query(None),
+    category: str | None = Query(None),
+    sort_by: str = Query("created_at"),
+    sort_order: str = Query("desc", regex="^(asc|desc)$"),
+    service: ProjectService = Depends(get_project_service),
+) -> PaginatedResponse[ProjectResponse]:
+    query = ProjectListQuery(
+        page=page, page_size=page_size,
+        status=status, category=category,
+        sort_by=sort_by, sort_order=sort_order,
+    )
+    projects, total = await service.list_projects(query)
+    return PaginatedResponse.build(items=projects, total=total, query=query)
+```
+
+### Rules
+
+- One query object per aggregate list operation — `ProjectListQuery`, `SubscriptionListQuery`, etc.
+- Query objects are frozen dataclasses — immutable after creation
+- Query objects live in `src/application/queries/` — they are application-layer concerns
+- Repository port accepts the query object — infrastructure decides how to translate it to DynamoDB operations
+- Adding a new filter = add a field to the query object + update `_build_filter_expression()` — no signature changes anywhere else
+- Admin endpoints and public endpoints can use the same query object with different defaults
+
 ---
 
 ## Summary Checklist (before every PR)
@@ -521,4 +1073,8 @@ async def test_register_user_saves_and_returns_user() -> None:
 □ Tests verify user_message safety — no PII or internals in client-facing message
 □ duration_ms logged on all application service methods
 □ 80%+ unit test coverage
+□ Outbox pattern used for events that must not be lost (dual-write scenarios)
+□ Unit of Work used for multi-aggregate atomic operations
+□ Circuit breaker wraps all external service calls (IdentityManagerClient, EventBridgePublisher)
+□ Query objects used for list endpoints — no parameter explosion on repository methods
 ```
