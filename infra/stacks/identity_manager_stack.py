@@ -1,11 +1,12 @@
 """
-IdentityManagerStack — Lambda + API Gateway + DynamoDB + CloudWatch for ugsys-identity-manager.
+IdentityManagerStack — Lambda (container image) + API Gateway + DynamoDB + CloudWatch.
 
 Resources:
+  - ECR repository: ugsys-identity-manager
   - DynamoDB table: ugsys-identity-manager-users-{env}
   - DynamoDB table: ugsys-identity-{env}-token-blacklist  (JWT revocation, TTL-enabled)
   - Secrets Manager secret: ugsys-identity-manager-jwt-secret-{env}
-  - Lambda function: ugsys-identity-manager-{env}
+  - Lambda function (container image): ugsys-identity-manager-{env}
   - API Gateway HTTP API: ugsys-identity-manager-{env}
   - CloudWatch Log Group (KMS-encrypted)
   - IAM execution role (least privilege)
@@ -15,6 +16,7 @@ import aws_cdk as cdk
 import aws_cdk.aws_apigatewayv2 as apigwv2
 import aws_cdk.aws_apigatewayv2_integrations as integrations
 import aws_cdk.aws_dynamodb as dynamodb
+import aws_cdk.aws_ecr as ecr
 import aws_cdk.aws_iam as iam
 import aws_cdk.aws_kms as kms
 import aws_cdk.aws_lambda as lambda_
@@ -36,6 +38,26 @@ class IdentityManagerStack(cdk.Stack):
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
+        # ── ECR Repository ────────────────────────────────────────────────────
+        # Service CI/CD pushes container images here; Lambda pulls from it.
+        # Bootstrap: push at least one image tagged "latest" before first cdk deploy.
+        self.ecr_repo = ecr.Repository(
+            self,
+            "EcrRepo",
+            repository_name="ugsys-identity-manager",
+            image_scan_on_push=True,
+            lifecycle_rules=[
+                ecr.LifecycleRule(
+                    description="Keep last 10 images",
+                    max_image_count=10,
+                    tag_status=ecr.TagStatus.ANY,
+                )
+            ],
+            removal_policy=(
+                cdk.RemovalPolicy.RETAIN if env_name == "prod" else cdk.RemovalPolicy.DESTROY
+            ),
+        )
+
         # ── DynamoDB — Users table ─────────────────────────────────────────────
         self.users_table = dynamodb.Table(
             self,
@@ -53,7 +75,7 @@ class IdentityManagerStack(cdk.Stack):
             ),
         )
 
-        # GSI: email → user lookup
+        # GSI: email -> user lookup
         self.users_table.add_global_secondary_index(
             index_name="email-index",
             partition_key=dynamodb.Attribute(name="email", type=dynamodb.AttributeType.STRING),
@@ -62,7 +84,6 @@ class IdentityManagerStack(cdk.Stack):
 
         # ── DynamoDB — Token blacklist table ──────────────────────────────────
         # Stores revoked JWT JTIs. TTL attribute auto-expires entries at token expiry.
-        # Table name matches config.py: ugsys-identity-{env}-token-blacklist
         self.token_blacklist_table = dynamodb.Table(
             self,
             "TokenBlacklistTable",
@@ -77,8 +98,6 @@ class IdentityManagerStack(cdk.Stack):
         )
 
         # ── Secrets Manager — JWT signing secret ──────────────────────────────
-        # Auto-generates a cryptographically secure random string (64 hex chars = 256 bits).
-        # Lambda reads this at cold-start via the JWT_SECRET_KEY env var.
         jwt_secret = secretsmanager.Secret(
             self,
             "JwtSecret",
@@ -88,7 +107,7 @@ class IdentityManagerStack(cdk.Stack):
                 secret_string_template="{}",
                 generate_string_key="jwt_secret_key",
                 password_length=64,
-                exclude_punctuation=True,  # alphanumeric only — safe in env vars
+                exclude_punctuation=True,
             ),
             encryption_key=platform_key,
             removal_policy=(
@@ -115,10 +134,32 @@ class IdentityManagerStack(cdk.Stack):
             description="Execution role for ugsys-identity-manager Lambda",
         )
 
-        # Basic Lambda execution (CloudWatch Logs)
         execution_role.add_managed_policy(
             iam.ManagedPolicy.from_aws_managed_policy_name(
                 "service-role/AWSLambdaBasicExecutionRole"
+            )
+        )
+
+        # ECR — pull container image
+        execution_role.add_to_policy(
+            iam.PolicyStatement(
+                sid="ECRPullAccess",
+                effect=iam.Effect.ALLOW,
+                actions=[
+                    "ecr:GetDownloadUrlForLayer",
+                    "ecr:BatchGetImage",
+                    "ecr:BatchCheckLayerAvailability",
+                ],
+                resources=[self.ecr_repo.repository_arn],
+            )
+        )
+
+        execution_role.add_to_policy(
+            iam.PolicyStatement(
+                sid="ECRAuthToken",
+                effect=iam.Effect.ALLOW,
+                actions=["ecr:GetAuthorizationToken"],
+                resources=["*"],
             )
         )
 
@@ -193,17 +234,17 @@ class IdentityManagerStack(cdk.Stack):
             )
         )
 
-        # ── Lambda function ───────────────────────────────────────────────────
-        # Deployed with a placeholder zip; CI/CD updates the code on every push.
-        self.function = lambda_.Function(
+        # ── Lambda function (container image) ─────────────────────────────────
+        # CI/CD pushes a new image to ECR then calls:
+        #   aws lambda update-function-code --image-uri <ecr-uri>:<sha>
+        # CDK only manages the function config; image updates happen outside CDK.
+        self.function = lambda_.DockerImageFunction(
             self,
             "LambdaFunction",
             function_name=f"ugsys-identity-manager-{env_name}",
-            runtime=lambda_.Runtime.PYTHON_3_13,
-            handler="handler.handler",
-            code=lambda_.Code.from_inline(
-                # Minimal bootstrap — replaced by CI/CD on first deploy
-                "def handler(event, context): return {'statusCode': 200, 'body': 'bootstrapping'}"
+            code=lambda_.DockerImageCode.from_ecr(
+                self.ecr_repo,
+                tag_or_digest="latest",
             ),
             role=execution_role,
             timeout=cdk.Duration.seconds(30),
@@ -216,9 +257,6 @@ class IdentityManagerStack(cdk.Stack):
                 "EVENT_BUS_NAME": "ugsys-platform-bus",
                 "LOG_LEVEL": "INFO",
                 "JWT_ALGORITHM": "HS256",
-                # JWT_SECRET_KEY is resolved at Lambda init from Secrets Manager
-                # via the SECRETS_MANAGER_JWT_SECRET_ARN env var below.
-                # The application reads it with boto3 on cold start.
                 "SECRETS_MANAGER_JWT_SECRET_ARN": jwt_secret.secret_arn,
             },
             log_group=log_group,
@@ -232,7 +270,7 @@ class IdentityManagerStack(cdk.Stack):
             api_name=f"ugsys-identity-manager-{env_name}",
             description="ugsys Identity Manager API",
             cors_preflight=apigwv2.CorsPreflightOptions(
-                allow_origins=["https://cbba.cloud.org.bo"],
+                allow_origins=["https://registry.cloud.org.bo"],
                 allow_methods=[apigwv2.CorsHttpMethod.ANY],
                 allow_headers=["Content-Type", "Authorization", "X-Request-ID"],
                 max_age=cdk.Duration.days(1),
@@ -258,6 +296,13 @@ class IdentityManagerStack(cdk.Stack):
             "FunctionName",
             value=self.function.function_name,
             export_name=f"UgsysIdentityManagerFunctionName-{env_name}",
+        )
+        cdk.CfnOutput(
+            self,
+            "EcrRepositoryUri",
+            value=self.ecr_repo.repository_uri,
+            export_name=f"UgsysIdentityManagerEcrUri-{env_name}",
+            description="ECR URI — set as ECR_REPOSITORY_URI secret in the service repo",
         )
         cdk.CfnOutput(
             self,

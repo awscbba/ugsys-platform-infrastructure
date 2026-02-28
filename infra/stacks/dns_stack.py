@@ -1,28 +1,26 @@
 """
-DnsStack — Route53 hosted zone for cbba.cloud.org.bo.
+DnsStack — Route53 hosted zone for cloud.org.bo.
 
 Each service gets a subdomain:
-  identity.cbba.cloud.org.bo
-  projects.cbba.cloud.org.bo
-  messaging.cbba.cloud.org.bo
-  omnichannel.cbba.cloud.org.bo
-  admin.cbba.cloud.org.bo
-  api.cbba.cloud.org.bo  (public API gateway)
+  auth.cloud.org.bo       (identity manager API)
+  api.cloud.org.bo        (projects registry API)
+  registry.cloud.org.bo   (projects registry SPA)
+  admin.cloud.org.bo      (admin panel)
+  messaging.cloud.org.bo  (omnichannel service)
 """
 
 import aws_cdk as cdk
 import aws_cdk.aws_route53 as route53
 from constructs import Construct
 
-DOMAIN = "cbba.cloud.org.bo"
+DOMAIN = "cloud.org.bo"
 
 SUBDOMAINS = [
-    "identity",
-    "projects",
-    "messaging",
-    "omnichannel",
-    "admin",
+    "auth",
     "api",
+    "registry",
+    "admin",
+    "messaging",
 ]
 
 

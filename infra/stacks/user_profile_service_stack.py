@@ -1,11 +1,12 @@
 """
-UserProfileServiceStack — Lambda + API Gateway + DynamoDB + CloudWatch.
+UserProfileServiceStack — Lambda (container image) + API Gateway + DynamoDB + CloudWatch.
 
 Service: ugsys-user-profile-service
 
 Resources:
+  - ECR repository: ugsys-user-profile-service
   - DynamoDB table: ugsys-user-profiles-{env}
-  - Lambda function: ugsys-user-profile-service-{env}
+  - Lambda function (container image): ugsys-user-profile-service-{env}
   - API Gateway HTTP API: ugsys-user-profile-service-{env}
   - CloudWatch Log Group (KMS-encrypted)
   - IAM execution role (least privilege)
@@ -15,6 +16,7 @@ import aws_cdk as cdk
 import aws_cdk.aws_apigatewayv2 as apigwv2
 import aws_cdk.aws_apigatewayv2_integrations as integrations
 import aws_cdk.aws_dynamodb as dynamodb
+import aws_cdk.aws_ecr as ecr
 import aws_cdk.aws_iam as iam
 import aws_cdk.aws_kms as kms
 import aws_cdk.aws_lambda as lambda_
@@ -35,6 +37,24 @@ class UserProfileServiceStack(cdk.Stack):
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
+        # ── ECR Repository ────────────────────────────────────────────────────
+        self.ecr_repo = ecr.Repository(
+            self,
+            "EcrRepo",
+            repository_name="ugsys-user-profile-service",
+            image_scan_on_push=True,
+            lifecycle_rules=[
+                ecr.LifecycleRule(
+                    description="Keep last 10 images",
+                    max_image_count=10,
+                    tag_status=ecr.TagStatus.ANY,
+                )
+            ],
+            removal_policy=(
+                cdk.RemovalPolicy.RETAIN if env_name == "prod" else cdk.RemovalPolicy.DESTROY
+            ),
+        )
+
         # ── DynamoDB — Profiles table ──────────────────────────────────────────
         self.profiles_table = dynamodb.Table(
             self,
@@ -52,7 +72,7 @@ class UserProfileServiceStack(cdk.Stack):
             ),
         )
 
-        # GSI: email → profile lookup (for cross-service queries)
+        # GSI: email -> profile lookup (for cross-service queries)
         self.profiles_table.add_global_secondary_index(
             index_name="email-index",
             partition_key=dynamodb.Attribute(name="email", type=dynamodb.AttributeType.STRING),
@@ -81,6 +101,29 @@ class UserProfileServiceStack(cdk.Stack):
         execution_role.add_managed_policy(
             iam.ManagedPolicy.from_aws_managed_policy_name(
                 "service-role/AWSLambdaBasicExecutionRole"
+            )
+        )
+
+        # ECR — pull container image
+        execution_role.add_to_policy(
+            iam.PolicyStatement(
+                sid="ECRPullAccess",
+                effect=iam.Effect.ALLOW,
+                actions=[
+                    "ecr:GetDownloadUrlForLayer",
+                    "ecr:BatchGetImage",
+                    "ecr:BatchCheckLayerAvailability",
+                ],
+                resources=[self.ecr_repo.repository_arn],
+            )
+        )
+
+        execution_role.add_to_policy(
+            iam.PolicyStatement(
+                sid="ECRAuthToken",
+                effect=iam.Effect.ALLOW,
+                actions=["ecr:GetAuthorizationToken"],
+                resources=["*"],
             )
         )
 
@@ -123,15 +166,14 @@ class UserProfileServiceStack(cdk.Stack):
             )
         )
 
-        # ── Lambda function ───────────────────────────────────────────────────
-        self.function = lambda_.Function(
+        # ── Lambda function (container image) ─────────────────────────────────
+        self.function = lambda_.DockerImageFunction(
             self,
             "LambdaFunction",
             function_name=f"ugsys-user-profile-service-{env_name}",
-            runtime=lambda_.Runtime.PYTHON_3_13,
-            handler="handler.handler",
-            code=lambda_.Code.from_inline(
-                "def handler(event, context): return {'statusCode': 200, 'body': 'bootstrapping'}"
+            code=lambda_.DockerImageCode.from_ecr(
+                self.ecr_repo,
+                tag_or_digest="latest",
             ),
             role=execution_role,
             timeout=cdk.Duration.seconds(30),
@@ -154,7 +196,7 @@ class UserProfileServiceStack(cdk.Stack):
             api_name=f"ugsys-user-profile-service-{env_name}",
             description="ugsys User Profile Service API",
             cors_preflight=apigwv2.CorsPreflightOptions(
-                allow_origins=["https://cbba.cloud.org.bo"],
+                allow_origins=["https://registry.cloud.org.bo"],
                 allow_methods=[apigwv2.CorsHttpMethod.ANY],
                 allow_headers=["Content-Type", "Authorization", "X-Request-ID"],
                 max_age=cdk.Duration.days(1),
@@ -180,6 +222,13 @@ class UserProfileServiceStack(cdk.Stack):
             "FunctionName",
             value=self.function.function_name,
             export_name=f"UgsysUserProfileServiceFunctionName-{env_name}",
+        )
+        cdk.CfnOutput(
+            self,
+            "EcrRepositoryUri",
+            value=self.ecr_repo.repository_uri,
+            export_name=f"UgsysUserProfileServiceEcrUri-{env_name}",
+            description="ECR URI — set as ECR_REPOSITORY_URI secret in the service repo",
         )
         cdk.CfnOutput(
             self,
