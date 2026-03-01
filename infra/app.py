@@ -5,10 +5,10 @@ ugsys Platform Infrastructure CDK App.
 Stacks:
   - SecurityStack       -> Shared KMS key
   - EventBusStack       -> Shared EventBridge custom bus
-  - DnsStack            -> Route53 hosted zone (cloud.org.bo)
+  - DnsStack            -> Route53 hosted zone (apps.cloud.org.bo)
   - GithubOidcStack     -> OIDC provider for GitHub Actions (all repos)
   - ObservabilityStack  -> Centralized CloudWatch dashboards + alarms
-  - FrontendStack       -> S3 + CloudFront for React SPA (registry.cloud.org.bo)
+  - FrontendStack       -> S3 + CloudFront for React SPA (registry.apps.cloud.org.bo)
 """
 
 import sys
@@ -116,7 +116,7 @@ projects_registry_stack = ProjectsRegistryStack(
 )
 projects_registry_stack.add_dependency(security_stack)
 
-# Certificate ARN for cloud.org.bo — must be in us-east-1 (CloudFront requirement)
+# Certificate ARN for apps.cloud.org.bo — must be in us-east-1 (CloudFront requirement)
 # Set via CDK context: cdk deploy -c certificate_arn=arn:aws:acm:us-east-1:...
 certificate_arn = app.node.try_get_context("certificate_arn") or ""
 

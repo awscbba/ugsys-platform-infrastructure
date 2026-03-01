@@ -1,19 +1,19 @@
 """
-DnsStack — Route53 hosted zone for cloud.org.bo.
+DnsStack — Route53 hosted zone for apps.cloud.org.bo.
 
 Each service gets a subdomain:
-  auth.cloud.org.bo       (identity manager API)
-  api.cloud.org.bo        (projects registry API)
-  registry.cloud.org.bo   (projects registry SPA)
-  admin.cloud.org.bo      (admin panel)
-  messaging.cloud.org.bo  (omnichannel service)
+  auth.apps.cloud.org.bo       (identity manager API)
+  api.apps.cloud.org.bo        (projects registry API)
+  registry.apps.cloud.org.bo   (projects registry SPA)
+  admin.apps.cloud.org.bo      (admin panel)
+  messaging.apps.cloud.org.bo  (omnichannel service)
 """
 
 import aws_cdk as cdk
 import aws_cdk.aws_route53 as route53
 from constructs import Construct
 
-DOMAIN = "cloud.org.bo"
+DOMAIN = "apps.cloud.org.bo"
 
 SUBDOMAINS = [
     "auth",

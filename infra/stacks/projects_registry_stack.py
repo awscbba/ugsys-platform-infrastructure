@@ -193,7 +193,7 @@ class ProjectsRegistryStack(cdk.Stack):
             cors=[
                 s3.CorsRule(
                     allowed_methods=[s3.HttpMethods.PUT],
-                    allowed_origins=["https://registry.cloud.org.bo"],
+                    allowed_origins=["https://registry.apps.cloud.org.bo"],
                     allowed_headers=["*"],
                     max_age=3000,
                 )
@@ -346,7 +346,7 @@ class ProjectsRegistryStack(cdk.Stack):
             api_name=f"ugsys-projects-registry-{env_name}",
             description="ugsys Projects Registry API",
             cors_preflight=apigwv2.CorsPreflightOptions(
-                allow_origins=["https://registry.cloud.org.bo"],
+                allow_origins=["https://registry.apps.cloud.org.bo"],
                 allow_methods=[apigwv2.CorsHttpMethod.ANY],
                 allow_headers=["Content-Type", "Authorization", "X-Request-ID"],
                 max_age=cdk.Duration.days(1),

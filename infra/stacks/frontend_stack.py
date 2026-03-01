@@ -1,12 +1,12 @@
 """
 FrontendStack — S3 + CloudFront for the ugsys React SPA frontend.
 
-Domain: registry.cloud.org.bo
+Domain: registry.apps.cloud.org.bo
 Resources:
   - S3 bucket: ugsys-frontend-{env}  (private, OAC-only access)
   - CloudFront OAC (Origin Access Control)
   - CloudFront distribution with:
-      - Custom domain: registry.cloud.org.bo (prod) / registry.dev.cloud.org.bo (dev)
+      - Custom domain: registry.apps.cloud.org.bo (prod) / registry.dev.apps.cloud.org.bo (dev)
       - ACM certificate (us-east-1, passed in as parameter)
       - Cache behaviors: /assets/* → 1yr immutable, default → no-cache
       - Custom error responses: 403/404 → /index.html (200) for SPA routing
@@ -23,7 +23,7 @@ import aws_cdk.aws_route53_targets as route53_targets
 import aws_cdk.aws_s3 as s3
 from constructs import Construct
 
-DOMAIN = "cloud.org.bo"
+DOMAIN = "apps.cloud.org.bo"
 FRONTEND_SUBDOMAIN = "registry"
 
 
