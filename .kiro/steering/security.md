@@ -175,7 +175,7 @@ Auth tokens issued as cookies MUST use:
 # ✅ Explicit allowlist — never wildcard
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.allowed_origins,  # ["https://admin.cbba.cloud.org.bo"]
+    allow_origins=settings.allowed_origins,  # ["https://admin.apps.cloud.org.bo"]
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
     allow_headers=["Authorization", "Content-Type", "X-Request-ID", "X-CSRF-Token"],
