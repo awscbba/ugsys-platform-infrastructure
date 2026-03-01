@@ -6,7 +6,7 @@ inclusion: always
 
 ## What We Are Building
 
-AWS User Group Cbba — a 5-microservice platform for the community at `cloud.org.bo`.
+AWS User Group Cbba — a 5-microservice platform for the community at `cloud.org.bo`. Services are deployed under `*.apps.cloud.org.bo`.
 
 ## The 6 Services
 
@@ -31,7 +31,7 @@ AWS User Group Cbba — a 5-microservice platform for the community at `cloud.or
 All repos live under `awscbba` org. Never push directly to `main` — always `feature/` branch → PR.
 
 ## Domain
-`cloud.org.bo`
+`cloud.org.bo` — services live under `*.apps.cloud.org.bo` (subdomain delegation via Route53)
 
 ## Execution Phases
 - **Phase 0** (current): Platform infra + shared libs + identity-manager scaffold
