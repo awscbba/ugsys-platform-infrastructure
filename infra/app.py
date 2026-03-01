@@ -5,9 +5,10 @@ ugsys Platform Infrastructure CDK App.
 Stacks:
   - SecurityStack       -> Shared KMS key
   - EventBusStack       -> Shared EventBridge custom bus
-  - DnsStack            -> Route53 hosted zone (cbba.cloud.org.bo)
+  - DnsStack            -> Route53 hosted zone (apps.cloud.org.bo)
   - GithubOidcStack     -> OIDC provider for GitHub Actions (all repos)
   - ObservabilityStack  -> Centralized CloudWatch dashboards + alarms
+  - FrontendStack       -> S3 + CloudFront for React SPA (registry.apps.cloud.org.bo)
 """
 
 import sys
@@ -17,12 +18,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 import aws_cdk as cdk
-
 from stacks.dns_stack import DnsStack
 from stacks.event_bus_stack import EventBusStack
+from stacks.frontend_stack import FrontendStack
 from stacks.github_oidc_stack import GithubOidcStack
 from stacks.identity_manager_stack import IdentityManagerStack
 from stacks.observability_stack import ObservabilityStack
+from stacks.projects_registry_stack import ProjectsRegistryStack
 from stacks.security_stack import SecurityStack
 from stacks.user_profile_service_stack import UserProfileServiceStack
 
@@ -103,5 +105,30 @@ user_profile_service_stack = UserProfileServiceStack(
     tags=tags,
 )
 user_profile_service_stack.add_dependency(security_stack)
+
+projects_registry_stack = ProjectsRegistryStack(
+    app,
+    f"UgsysProjectsRegistry-{env_name}",
+    env_name=env_name,
+    platform_key=security_stack.platform_key,
+    env=aws_env,
+    tags=tags,
+)
+projects_registry_stack.add_dependency(security_stack)
+
+# Certificate ARN for apps.cloud.org.bo — must be in us-east-1 (CloudFront requirement)
+# Set via CDK context: cdk deploy -c certificate_arn=arn:aws:acm:us-east-1:...
+certificate_arn = app.node.try_get_context("certificate_arn") or ""
+
+frontend_stack = FrontendStack(
+    app,
+    f"UgsysFrontend-{env_name}",
+    env_name=env_name,
+    hosted_zone=dns_stack.hosted_zone,
+    certificate_arn=certificate_arn,
+    env=aws_env,
+    tags=tags,
+)
+frontend_stack.add_dependency(dns_stack)
 
 app.synth()
