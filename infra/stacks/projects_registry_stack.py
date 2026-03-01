@@ -343,7 +343,6 @@ class ProjectsRegistryStack(cdk.Stack):
         self.api = apigwv2.HttpApi(
             self,
             "HttpApi",
-            api_name=f"ugsys-projects-registry-{env_name}",
             description="ugsys Projects Registry API",
             cors_preflight=apigwv2.CorsPreflightOptions(
                 allow_origins=["https://registry.apps.cloud.org.bo"],

@@ -267,7 +267,6 @@ class IdentityManagerStack(cdk.Stack):
         self.api = apigwv2.HttpApi(
             self,
             "HttpApi",
-            api_name=f"ugsys-identity-manager-{env_name}",
             description="ugsys Identity Manager API",
             cors_preflight=apigwv2.CorsPreflightOptions(
                 allow_origins=["https://registry.apps.cloud.org.bo"],

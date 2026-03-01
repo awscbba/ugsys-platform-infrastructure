@@ -193,7 +193,6 @@ class UserProfileServiceStack(cdk.Stack):
         self.api = apigwv2.HttpApi(
             self,
             "HttpApi",
-            api_name=f"ugsys-user-profile-service-{env_name}",
             description="ugsys User Profile Service API",
             cors_preflight=apigwv2.CorsPreflightOptions(
                 allow_origins=["https://registry.apps.cloud.org.bo"],
