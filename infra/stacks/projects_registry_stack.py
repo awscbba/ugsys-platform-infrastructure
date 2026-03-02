@@ -18,14 +18,19 @@ Resources:
 import aws_cdk as cdk
 import aws_cdk.aws_apigatewayv2 as apigwv2
 import aws_cdk.aws_apigatewayv2_integrations as integrations
+import aws_cdk.aws_certificatemanager as acm
 import aws_cdk.aws_dynamodb as dynamodb
 import aws_cdk.aws_ecr as ecr
 import aws_cdk.aws_iam as iam
 import aws_cdk.aws_kms as kms
 import aws_cdk.aws_lambda as lambda_
 import aws_cdk.aws_logs as logs
+import aws_cdk.aws_route53 as route53
+import aws_cdk.aws_route53_targets as route53_targets
 import aws_cdk.aws_s3 as s3
 from constructs import Construct
+
+CUSTOM_DOMAIN = "api.apps.cloud.org.bo"
 
 
 class ProjectsRegistryStack(cdk.Stack):
@@ -37,6 +42,8 @@ class ProjectsRegistryStack(cdk.Stack):
         construct_id: str,
         env_name: str,
         platform_key: kms.IKey,
+        hosted_zone: route53.IHostedZone,
+        certificate_arn: str,
         **kwargs: object,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
@@ -357,6 +364,34 @@ class ProjectsRegistryStack(cdk.Stack):
             methods=[apigwv2.HttpMethod.ANY],
             integration=integrations.HttpLambdaIntegration("LambdaIntegration", self.function),
         )
+
+        # ── Custom domain ─────────────────────────────────────────────────────
+        if certificate_arn:
+            certificate = acm.Certificate.from_certificate_arn(self, "Certificate", certificate_arn)
+            domain = apigwv2.DomainName(
+                self,
+                "DomainName",
+                domain_name=CUSTOM_DOMAIN,
+                certificate=certificate,
+            )
+            apigwv2.ApiMapping(self, "ApiMapping", api=self.api, domain_name=domain)
+            route53.ARecord(
+                self,
+                "AliasRecord",
+                zone=hosted_zone,
+                record_name=CUSTOM_DOMAIN,
+                target=route53.RecordTarget.from_alias(
+                    route53_targets.ApiGatewayv2DomainProperties(
+                        domain.regional_domain_name, domain.regional_hosted_zone_id
+                    )
+                ),
+            )
+            cdk.CfnOutput(
+                self,
+                "CustomDomainUrl",
+                value=f"https://{CUSTOM_DOMAIN}",
+                export_name=f"UgsysProjectsRegistryCustomUrl-{env_name}",
+            )
 
         # ── Outputs ───────────────────────────────────────────────────────────
         cdk.CfnOutput(

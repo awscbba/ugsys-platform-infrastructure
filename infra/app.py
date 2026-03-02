@@ -86,39 +86,48 @@ observability_stack = ObservabilityStack(
 observability_stack.add_dependency(event_bus_stack)
 observability_stack.add_dependency(security_stack)
 
+# Certificate ARN for apps.cloud.org.bo — must be in us-east-1 (CloudFront requirement)
+# Set via CDK context: cdk deploy -c certificate_arn=arn:aws:acm:us-east-1:...
+certificate_arn = app.node.try_get_context("certificate_arn") or ""
+
 identity_manager_stack = IdentityManagerStack(
     app,
     f"UgsysIdentityManager-{env_name}",
     env_name=env_name,
     platform_key=security_stack.platform_key,
+    hosted_zone=dns_stack.hosted_zone,
+    certificate_arn=certificate_arn,
     env=aws_env,
     tags=tags,
 )
 identity_manager_stack.add_dependency(security_stack)
+identity_manager_stack.add_dependency(dns_stack)
 
 user_profile_service_stack = UserProfileServiceStack(
     app,
     f"UgsysUserProfileService-{env_name}",
     env_name=env_name,
     platform_key=security_stack.platform_key,
+    hosted_zone=dns_stack.hosted_zone,
+    certificate_arn=certificate_arn,
     env=aws_env,
     tags=tags,
 )
 user_profile_service_stack.add_dependency(security_stack)
+user_profile_service_stack.add_dependency(dns_stack)
 
 projects_registry_stack = ProjectsRegistryStack(
     app,
     f"UgsysProjectsRegistry-{env_name}",
     env_name=env_name,
     platform_key=security_stack.platform_key,
+    hosted_zone=dns_stack.hosted_zone,
+    certificate_arn=certificate_arn,
     env=aws_env,
     tags=tags,
 )
 projects_registry_stack.add_dependency(security_stack)
-
-# Certificate ARN for apps.cloud.org.bo — must be in us-east-1 (CloudFront requirement)
-# Set via CDK context: cdk deploy -c certificate_arn=arn:aws:acm:us-east-1:...
-certificate_arn = app.node.try_get_context("certificate_arn") or ""
+projects_registry_stack.add_dependency(dns_stack)
 
 frontend_stack = FrontendStack(
     app,
