@@ -59,8 +59,24 @@ jobs:
 
       - name: CDK diff
         run: |
-          uv run cdk diff --app "python infra/app.py"             --context env=${{ env.CDK_ENV }}             --context account=${{ secrets.AWS_ACCOUNT_ID }}             --context region=${{ env.AWS_REGION }}             --all 2>&1 || true
+          uv run cdk diff --app "python infra/app.py" \
+            --context env=${{ env.CDK_ENV }} \
+            --context account=${{ secrets.AWS_ACCOUNT_ID }} \
+            --context region=${{ env.AWS_REGION }} \
+            --context certificate_arn=${{ secrets.CERTIFICATE_ARN }} \
+            UgsysPlatformSecurity-${{ env.CDK_ENV }} \
+            UgsysPlatformEventBus-${{ env.CDK_ENV }} \
+            UgsysPlatformGithubOidc-${{ env.CDK_ENV }} \
+            UgsysPlatformObservability-${{ env.CDK_ENV }} \
+            UgsysIdentityManager-${{ env.CDK_ENV }} \
+            UgsysUserProfileService-${{ env.CDK_ENV }} \
+            UgsysProjectsRegistry-${{ env.CDK_ENV }} \
+            UgsysFrontend-${{ env.CDK_ENV }} \
+            2>&1 || true
         # || true — diff exits 1 when there are changes, which is expected
+        # UgsysPlatformDns is intentionally excluded — it has a stable cross-stack
+        # export consumed by UgsysFrontend and should only be deployed explicitly
+        # when DNS changes are intentional.
 
   # ============================================================
   # Deploy — runs after diff, requires manual approval on prod
@@ -95,7 +111,24 @@ jobs:
 
       - name: CDK deploy
         run: |
-          uv run cdk deploy --app "python infra/app.py"             --context env=${{ env.CDK_ENV }}             --context account=${{ secrets.AWS_ACCOUNT_ID }}             --context region=${{ env.AWS_REGION }}             --all             --require-approval never             --outputs-file cdk-outputs.json
+          uv run cdk deploy --app "python infra/app.py" \
+            --context env=${{ env.CDK_ENV }} \
+            --context account=${{ secrets.AWS_ACCOUNT_ID }} \
+            --context region=${{ env.AWS_REGION }} \
+            --context certificate_arn=${{ secrets.CERTIFICATE_ARN }} \
+            UgsysPlatformSecurity-${{ env.CDK_ENV }} \
+            UgsysPlatformEventBus-${{ env.CDK_ENV }} \
+            UgsysPlatformGithubOidc-${{ env.CDK_ENV }} \
+            UgsysPlatformObservability-${{ env.CDK_ENV }} \
+            UgsysIdentityManager-${{ env.CDK_ENV }} \
+            UgsysUserProfileService-${{ env.CDK_ENV }} \
+            UgsysProjectsRegistry-${{ env.CDK_ENV }} \
+            UgsysFrontend-${{ env.CDK_ENV }} \
+            --require-approval never \
+            --outputs-file cdk-outputs.json
+        # UgsysPlatformDns is intentionally excluded — it has a stable cross-stack
+        # export consumed by UgsysFrontend and should only be deployed explicitly
+        # when DNS changes are intentional.
 
       - name: Upload CDK outputs
         uses: actions/upload-artifact@v4
