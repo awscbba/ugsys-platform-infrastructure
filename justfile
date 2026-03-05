@@ -37,7 +37,7 @@ format-check:
 
 # Synthesize all stacks — validates without deploying
 synth:
-    JSII_SILENCE_WARNING_UNTESTED_NODE_VERSION=1 uv run cdk synth --app "python infra/app.py" --quiet
+    JSII_SILENCE_WARNING_UNTESTED_NODE_VERSION=1 uv run cdk synth --app "python infra/app.py"
 
 # Bootstrap CDK in your AWS account (one-time per account/region)
 # Usage: just bootstrap <account_id> [region] [env]
