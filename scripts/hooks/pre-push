@@ -21,7 +21,7 @@ echo ""
 FAILED=0
 
 echo "▶ ruff check ..."
-if ! just lint; then
+if ! uv run ruff check infra/; then
     echo "✗ ruff check failed. Run 'just lint' for details."
     FAILED=1
 else
@@ -30,7 +30,7 @@ fi
 echo ""
 
 echo "▶ ruff format --check ..."
-if ! just format-check; then
+if ! uv run ruff format --check infra/; then
     echo "✗ ruff format check failed. Run 'just format' to fix."
     FAILED=1
 else
@@ -39,7 +39,7 @@ fi
 echo ""
 
 echo "▶ cdk synth (validates all stacks) ..."
-if ! just synth; then
+if ! JSII_SILENCE_WARNING_UNTESTED_NODE_VERSION=1 uv run cdk synth --app "python infra/app.py" --quiet; then
     echo "✗ CDK synth failed. Run 'just synth' for details."
     FAILED=1
 else
