@@ -71,6 +71,7 @@ jobs:
             UgsysIdentityManager-${{ env.CDK_ENV }} \
             UgsysUserProfileService-${{ env.CDK_ENV }} \
             UgsysProjectsRegistry-${{ env.CDK_ENV }} \
+            UgsysAdminPanelEcr-${{ env.CDK_ENV }} \
             UgsysAdminPanel-${{ env.CDK_ENV }} \
             UgsysFrontend-${{ env.CDK_ENV }} \
             2>&1 || true
@@ -80,12 +81,72 @@ jobs:
         # when DNS changes are intentional.
 
   # ============================================================
-  # Deploy — runs after diff, requires manual approval on prod
+  # Bootstrap ECR — ensures the ECR repo exists and has a
+  # placeholder image before the AdminPanel Lambda stack deploys.
+  # Runs after diff, before the main deploy.
+  # ============================================================
+  bootstrap-ecr:
+    name: Bootstrap ECR (${{ github.event.inputs.environment || 'prod' }})
+    runs-on: ubuntu-latest
+    needs: [diff]
+    environment: ${{ github.event.inputs.environment || 'prod' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Install CDK
+        run: npm install -g aws-cdk
+
+      - name: Deploy ECR repo only
+        # Deploy just the ECR repository so it exists before the Lambda stack.
+        # CDK will create the repo; subsequent steps push the placeholder image.
+        run: |
+          uv run cdk deploy --app "python infra/app.py" \
+            --context env=${{ env.CDK_ENV }} \
+            --context account=${{ secrets.AWS_ACCOUNT_ID }} \
+            --context region=${{ env.AWS_REGION }} \
+            --context certificate_arn=${{ secrets.CERTIFICATE_ARN }} \
+            UgsysAdminPanelEcr-${{ env.CDK_ENV }} \
+            --require-approval never 2>&1 || true
+          # || true — stack may already be fully deployed
+
+      - name: Push placeholder image to ECR (first deploy only)
+        run: |
+          ECR_URI="${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/ugsys-admin-panel"
+          # Check if a "latest" image already exists — skip if so
+          if aws ecr describe-images \
+              --repository-name ugsys-admin-panel \
+              --image-ids imageTag=latest \
+              --region ${{ env.AWS_REGION }} 2>/dev/null; then
+            echo "ECR image already exists — skipping placeholder push"
+          else
+            echo "Pushing placeholder image to ECR..."
+            aws ecr get-login-password --region ${{ env.AWS_REGION }} \
+              | docker login --username AWS --password-stdin "$ECR_URI"
+            docker pull public.ecr.aws/lambda/python:3.13
+            docker tag public.ecr.aws/lambda/python:3.13 "$ECR_URI:latest"
+            docker push "$ECR_URI:latest"
+            echo "Placeholder image pushed successfully"
+          fi
+
+  # ============================================================
+  # Deploy — runs after ECR bootstrap, deploys all stacks
   # ============================================================
   deploy:
     name: CDK Deploy (${{ github.event.inputs.environment || 'prod' }})
     runs-on: ubuntu-latest
-    needs: [diff]
+    needs: [bootstrap-ecr]
     environment: ${{ github.event.inputs.environment || 'prod' }}
     steps:
       - uses: actions/checkout@v4
@@ -110,27 +171,6 @@ jobs:
       - name: Install CDK
         run: npm install -g aws-cdk
 
-      - name: Bootstrap ECR with placeholder image (first deploy only)
-        run: |
-          ECR_URI="${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/ugsys-admin-panel"
-          # Ensure ECR repo exists and has at least one image tagged "latest"
-          # so the Lambda stack can be created. Skip if image already exists.
-          aws ecr describe-images --repository-name ugsys-admin-panel \
-            --image-ids imageTag=latest --region ${{ env.AWS_REGION }} 2>/dev/null && {
-            echo "ECR image already exists — skipping placeholder push"
-          } || {
-            echo "No image found — pushing placeholder to ECR"
-            aws ecr get-login-password --region ${{ env.AWS_REGION }} \
-              | docker login --username AWS --password-stdin "$ECR_URI"
-            docker pull public.ecr.aws/lambda/python:3.13
-            docker tag public.ecr.aws/lambda/python:3.13 "$ECR_URI:latest"
-            docker push "$ECR_URI:latest"
-          }
-        continue-on-error: true
-        # continue-on-error: ECR repo may not exist yet on very first deploy;
-        # CDK will create it in the same deploy run, then the admin-panel
-        # deploy workflow will push the real image.
-
       - name: CDK deploy
         run: |
           uv run cdk deploy --app "python infra/app.py" \
@@ -145,13 +185,13 @@ jobs:
             UgsysIdentityManager-${{ env.CDK_ENV }} \
             UgsysUserProfileService-${{ env.CDK_ENV }} \
             UgsysProjectsRegistry-${{ env.CDK_ENV }} \
+            UgsysAdminPanelEcr-${{ env.CDK_ENV }} \
             UgsysAdminPanel-${{ env.CDK_ENV }} \
             UgsysFrontend-${{ env.CDK_ENV }} \
             --require-approval never \
             --outputs-file cdk-outputs.json
-        # UgsysPlatformDns is intentionally excluded — it has a stable cross-stack
-        # export consumed by UgsysFrontend and should only be deployed explicitly
-        # when DNS changes are intentional.
+        # UgsysPlatformDns is intentionally excluded — stable cross-stack export,
+        # only deploy explicitly when DNS changes are intentional.
 
       - name: Upload CDK outputs
         uses: actions/upload-artifact@v4

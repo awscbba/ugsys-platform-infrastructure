@@ -48,6 +48,7 @@ class AdminPanelStack(cdk.Stack):
         scope: Construct,
         construct_id: str,
         env_name: str,
+        ecr_repo: ecr.IRepository,
         platform_key: kms.IKey,
         hosted_zone: route53.IHostedZone,
         certificate_arn: str,
@@ -57,23 +58,8 @@ class AdminPanelStack(cdk.Stack):
 
         domain_name = CUSTOM_DOMAIN if env_name == "prod" else f"admin.dev.{DOMAIN}"
 
-        # ── ECR Repository ────────────────────────────────────────────────────
-        self.ecr_repo = ecr.Repository(
-            self,
-            "EcrRepo",
-            repository_name="ugsys-admin-panel",
-            image_scan_on_push=True,
-            lifecycle_rules=[
-                ecr.LifecycleRule(
-                    description="Keep last 10 images",
-                    max_image_count=10,
-                    tag_status=ecr.TagStatus.ANY,
-                )
-            ],
-            removal_policy=(
-                cdk.RemovalPolicy.RETAIN if env_name == "prod" else cdk.RemovalPolicy.DESTROY
-            ),
-        )
+        # ECR repo is created by AdminPanelEcrStack and passed in
+        self.ecr_repo = ecr_repo
 
         # ── DynamoDB — Audit log table ─────────────────────────────────────────
         self.audit_log_table = dynamodb.Table(
@@ -286,13 +272,6 @@ class AdminPanelStack(cdk.Stack):
             "FunctionName",
             value=self.function.function_name,
             export_name=f"UgsysAdminPanelFunctionName-{env_name}",
-        )
-        cdk.CfnOutput(
-            self,
-            "EcrRepositoryUri",
-            value=self.ecr_repo.repository_uri,
-            export_name=f"UgsysAdminPanelEcrUri-{env_name}",
-            description="ECR URI — set as ECR_REPOSITORY_URI secret in the service repo",
         )
         cdk.CfnOutput(
             self,
