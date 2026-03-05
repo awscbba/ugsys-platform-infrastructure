@@ -141,24 +141,42 @@ jobs:
           fi
 
       - name: Adopt orphaned AdminPanel resources (first deploy only)
-        # If the previous stack attempt rolled back, DynamoDB tables and S3 bucket
-        # may exist but not be owned by any CloudFormation stack.
-        # Delete them so CDK can create and own them cleanly.
-        # Safe because these are empty on first deploy — no real data yet.
+        # Idempotently removes resources that may exist from a previous failed/rolled-back
+        # stack deploy. Safe because these are empty on first deploy.
+        # On subsequent deploys these resources are owned by CloudFormation and
+        # this step is a no-op (all aws cli calls will succeed or be skipped).
         run: |
           ENV=${{ env.CDK_ENV }}
 
-          # Only run if UgsysAdminPanel stack does NOT exist or is in ROLLBACK_COMPLETE
+          # Delete the ROLLBACK_COMPLETE stack if it exists in that state
+          STACK_STATUS=$(aws cloudformation describe-stacks \
+            --stack-name "UgsysAdminPanel-${ENV}" \
+            --region ${{ env.AWS_REGION }} \
+            --query 'Stacks[0].StackStatus' \
+            --output text 2>/dev/null || echo "DOES_NOT_EXIST")
+          echo "UgsysAdminPanel-${ENV} status: ${STACK_STATUS}"
+
+          if [[ "$STACK_STATUS" == "ROLLBACK_COMPLETE" ]]; then
+            echo "Deleting ROLLBACK_COMPLETE stack..."
+            aws cloudformation delete-stack \
+              --stack-name "UgsysAdminPanel-${ENV}" \
+              --region ${{ env.AWS_REGION }}
+            aws cloudformation wait stack-delete-complete \
+              --stack-name "UgsysAdminPanel-${ENV}" \
+              --region ${{ env.AWS_REGION }}
+            echo "Stack deleted"
+          fi
+
+          # Only clean up orphaned resources if stack is gone
           STACK_STATUS=$(aws cloudformation describe-stacks \
             --stack-name "UgsysAdminPanel-${ENV}" \
             --region ${{ env.AWS_REGION }} \
             --query 'Stacks[0].StackStatus' \
             --output text 2>/dev/null || echo "DOES_NOT_EXIST")
 
-          if [[ "$STACK_STATUS" == "ROLLBACK_COMPLETE" || "$STACK_STATUS" == "DOES_NOT_EXIST" ]]; then
-            echo "Stack is ${STACK_STATUS} — cleaning up orphaned resources..."
+          if [[ "$STACK_STATUS" == "DOES_NOT_EXIST" ]]; then
+            echo "Stack does not exist — cleaning up any orphaned resources..."
 
-            # Delete orphaned DynamoDB tables (empty — safe to delete)
             for TABLE in "ugsys-admin-audit-log-${ENV}" "ugsys-admin-service-registry-${ENV}"; do
               if aws dynamodb describe-table --table-name "$TABLE" --region ${{ env.AWS_REGION }} 2>/dev/null; then
                 echo "Deleting orphaned DynamoDB table: $TABLE"
@@ -166,34 +184,21 @@ jobs:
                 aws dynamodb wait table-not-exists --table-name "$TABLE" --region ${{ env.AWS_REGION }}
                 echo "Deleted: $TABLE"
               else
-                echo "Table $TABLE does not exist — skipping"
+                echo "Table $TABLE not found — skipping"
               fi
             done
 
-            # Delete orphaned S3 bucket (empty — safe to delete)
             BUCKET="ugsys-admin-shell-${ENV}"
-            if aws s3api head-bucket --bucket "$BUCKET" --region ${{ env.AWS_REGION }} 2>/dev/null; then
+            if aws s3api head-bucket --bucket "$BUCKET" 2>/dev/null; then
               echo "Deleting orphaned S3 bucket: $BUCKET"
               aws s3 rm "s3://$BUCKET" --recursive 2>/dev/null || true
               aws s3api delete-bucket --bucket "$BUCKET" --region ${{ env.AWS_REGION }}
               echo "Deleted: $BUCKET"
             else
-              echo "Bucket $BUCKET does not exist — skipping"
-            fi
-
-            # Delete the ROLLBACK_COMPLETE stack so CDK can redeploy
-            if [[ "$STACK_STATUS" == "ROLLBACK_COMPLETE" ]]; then
-              echo "Deleting ROLLBACK_COMPLETE stack UgsysAdminPanel-${ENV}..."
-              aws cloudformation delete-stack \
-                --stack-name "UgsysAdminPanel-${ENV}" \
-                --region ${{ env.AWS_REGION }}
-              aws cloudformation wait stack-delete-complete \
-                --stack-name "UgsysAdminPanel-${ENV}" \
-                --region ${{ env.AWS_REGION }}
-              echo "Stack deleted"
+              echo "Bucket $BUCKET not found — skipping"
             fi
           else
-            echo "Stack status is ${STACK_STATUS} — no cleanup needed"
+            echo "Stack exists (${STACK_STATUS}) — skipping orphan cleanup"
           fi
 
   # ============================================================
