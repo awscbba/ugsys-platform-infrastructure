@@ -8,7 +8,8 @@
     "jq@latest",
     "python@latest",
     "yq@latest",
-    "nodejs@latest"
+    "nodejs@latest",
+    "git@latest"
   ],
   "shell": {
     "init_hook": [

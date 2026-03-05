@@ -23,21 +23,21 @@ branch name:
 
 # Lint CDK stacks
 lint:
-    uv tool run ruff check infra/stacks/
+    uv run ruff check infra/
 
 # Format CDK stacks
 format:
-    uv tool run ruff format infra/stacks/
+    uv run ruff format infra/
 
 # Format check without modifying
 format-check:
-    uv tool run ruff format --check infra/stacks/
+    uv run ruff format --check infra/
 
 # ── CDK (all run from infra/ where cdk.json lives) ───────────────────────────
 
 # Synthesize all stacks — validates without deploying
 synth:
-    cd infra && uv run cdk synth --quiet
+    JSII_SILENCE_WARNING_UNTESTED_NODE_VERSION=1 uv run cdk synth --app "python infra/app.py"
 
 # Bootstrap CDK in your AWS account (one-time per account/region)
 # Usage: just bootstrap <account_id> [region] [env]

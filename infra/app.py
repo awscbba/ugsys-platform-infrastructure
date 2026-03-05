@@ -18,6 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 import aws_cdk as cdk
+from stacks.admin_panel_stack import AdminPanelStack
 from stacks.dns_stack import DnsStack
 from stacks.event_bus_stack import EventBusStack
 from stacks.frontend_stack import FrontendStack
@@ -139,5 +140,18 @@ frontend_stack = FrontendStack(
     tags=tags,
 )
 frontend_stack.add_dependency(dns_stack)
+
+admin_panel_stack = AdminPanelStack(
+    app,
+    f"UgsysAdminPanel-{env_name}",
+    env_name=env_name,
+    platform_key=security_stack.platform_key,
+    hosted_zone=dns_stack.hosted_zone,
+    certificate_arn=certificate_arn,
+    env=aws_env,
+    tags=tags,
+)
+admin_panel_stack.add_dependency(security_stack)
+admin_panel_stack.add_dependency(dns_stack)
 
 app.synth()

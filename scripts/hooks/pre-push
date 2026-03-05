@@ -1,16 +1,59 @@
 #!/usr/bin/env bash
-# pre-push hook — blocks direct push to main
+# pre-push hook: block direct push to main, run full lint + CDK synth
+
 set -euo pipefail
 
-RED='\033[0;31m'
-NC='\033[0m'
+BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null || echo "")
 
-while read local_ref local_sha remote_ref remote_sha; do
-  if [[ "$remote_ref" == "refs/heads/main" ]]; then
-    echo -e "${RED}✗ Direct push to 'main' is not allowed.${NC}"
-    echo "  Open a Pull Request instead."
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  pre-push checks"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+if [ "$BRANCH" = "main" ]; then
+    echo "✗ Direct pushes to 'main' are not allowed."
+    echo "  Please open a pull request instead."
     exit 1
-  fi
-done
+fi
 
+echo "  branch : $BRANCH"
+echo ""
+
+FAILED=0
+
+echo "▶ ruff check ..."
+if ! uv run ruff check infra/; then
+    echo "✗ ruff check failed. Run 'just lint' for details."
+    FAILED=1
+else
+    echo "✓ ruff check passed"
+fi
+echo ""
+
+echo "▶ ruff format --check ..."
+if ! uv run ruff format --check infra/; then
+    echo "✗ ruff format check failed. Run 'just format' to fix."
+    FAILED=1
+else
+    echo "✓ ruff format passed"
+fi
+echo ""
+
+echo "▶ cdk synth (validates all stacks) ..."
+if ! JSII_SILENCE_WARNING_UNTESTED_NODE_VERSION=1 uv run cdk synth --app "python infra/app.py"; then
+    echo "✗ CDK synth failed. Run 'just synth' for details."
+    FAILED=1
+else
+    echo "✓ CDK synth passed"
+fi
+echo ""
+
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+if [ "$FAILED" -ne 0 ]; then
+    echo "✗ pre-push checks FAILED — fix the errors above before pushing."
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    exit 1
+fi
+
+echo "✓ pre-push checks passed"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 exit 0

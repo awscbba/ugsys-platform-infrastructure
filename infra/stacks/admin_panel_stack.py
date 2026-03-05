@@ -1,0 +1,433 @@
+"""
+AdminPanelStack — Lambda (container image) + API Gateway + DynamoDB + S3 + CloudFront.
+
+Service: ugsys-admin-panel
+
+Resources:
+  - ECR repository: ugsys-admin-panel
+  - DynamoDB table: ugsys-admin-audit-log-{env}     (audit log entries)
+  - DynamoDB table: ugsys-admin-service-registry-{env} (service registrations)
+  - Lambda function (container image): ugsys-admin-panel-{env}  (BFF)
+  - API Gateway HTTP API: ugsys-admin-panel-{env}
+  - S3 bucket: ugsys-admin-shell-{env}              (React SPA static assets)
+  - CloudFront distribution: admin.apps.cloud.org.bo
+  - CloudWatch Log Group (KMS-encrypted)
+  - IAM execution role (least privilege)
+
+Domain layout:
+  admin.apps.cloud.org.bo          → CloudFront → S3 (Admin Shell SPA)
+  admin.apps.cloud.org.bo/api/v1/* → CloudFront → API Gateway → Lambda (BFF)
+"""
+
+import aws_cdk as cdk
+import aws_cdk.aws_apigatewayv2 as apigwv2
+import aws_cdk.aws_apigatewayv2_integrations as integrations
+import aws_cdk.aws_certificatemanager as acm
+import aws_cdk.aws_cloudfront as cloudfront
+import aws_cdk.aws_cloudfront_origins as origins
+import aws_cdk.aws_dynamodb as dynamodb
+import aws_cdk.aws_ecr as ecr
+import aws_cdk.aws_iam as iam
+import aws_cdk.aws_kms as kms
+import aws_cdk.aws_lambda as lambda_
+import aws_cdk.aws_logs as logs
+import aws_cdk.aws_route53 as route53
+import aws_cdk.aws_route53_targets as route53_targets
+import aws_cdk.aws_s3 as s3
+from constructs import Construct
+
+CUSTOM_DOMAIN = "admin.apps.cloud.org.bo"
+DOMAIN = "apps.cloud.org.bo"
+
+
+class AdminPanelStack(cdk.Stack):
+    """Provisions all AWS resources for the ugsys-admin-panel service."""
+
+    def __init__(
+        self,
+        scope: Construct,
+        construct_id: str,
+        env_name: str,
+        platform_key: kms.IKey,
+        hosted_zone: route53.IHostedZone,
+        certificate_arn: str,
+        **kwargs: object,
+    ) -> None:
+        super().__init__(scope, construct_id, **kwargs)
+
+        domain_name = CUSTOM_DOMAIN if env_name == "prod" else f"admin.dev.{DOMAIN}"
+
+        # ── ECR Repository ────────────────────────────────────────────────────
+        self.ecr_repo = ecr.Repository(
+            self,
+            "EcrRepo",
+            repository_name="ugsys-admin-panel",
+            image_scan_on_push=True,
+            lifecycle_rules=[
+                ecr.LifecycleRule(
+                    description="Keep last 10 images",
+                    max_image_count=10,
+                    tag_status=ecr.TagStatus.ANY,
+                )
+            ],
+            removal_policy=(
+                cdk.RemovalPolicy.RETAIN if env_name == "prod" else cdk.RemovalPolicy.DESTROY
+            ),
+        )
+
+        # ── DynamoDB — Audit log table ─────────────────────────────────────────
+        self.audit_log_table = dynamodb.Table(
+            self,
+            "AuditLogTable",
+            table_name=f"ugsys-admin-audit-log-{env_name}",
+            partition_key=dynamodb.Attribute(name="pk", type=dynamodb.AttributeType.STRING),
+            sort_key=dynamodb.Attribute(name="sk", type=dynamodb.AttributeType.STRING),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            encryption=dynamodb.TableEncryption.AWS_MANAGED,
+            point_in_time_recovery_specification=dynamodb.PointInTimeRecoverySpecification(
+                point_in_time_recovery_enabled=True
+            ),
+            removal_policy=(
+                cdk.RemovalPolicy.RETAIN if env_name == "prod" else cdk.RemovalPolicy.DESTROY
+            ),
+        )
+
+        # GSI: actor_user_id -> timestamp (query audit log by actor)
+        self.audit_log_table.add_global_secondary_index(
+            index_name="actor-index",
+            partition_key=dynamodb.Attribute(
+                name="actor_user_id", type=dynamodb.AttributeType.STRING
+            ),
+            sort_key=dynamodb.Attribute(name="timestamp", type=dynamodb.AttributeType.STRING),
+            projection_type=dynamodb.ProjectionType.ALL,
+        )
+
+        # ── DynamoDB — Service registry table ─────────────────────────────────
+        self.service_registry_table = dynamodb.Table(
+            self,
+            "ServiceRegistryTable",
+            table_name=f"ugsys-admin-service-registry-{env_name}",
+            partition_key=dynamodb.Attribute(name="pk", type=dynamodb.AttributeType.STRING),
+            sort_key=dynamodb.Attribute(name="sk", type=dynamodb.AttributeType.STRING),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            encryption=dynamodb.TableEncryption.AWS_MANAGED,
+            point_in_time_recovery_specification=dynamodb.PointInTimeRecoverySpecification(
+                point_in_time_recovery_enabled=True
+            ),
+            removal_policy=(
+                cdk.RemovalPolicy.RETAIN if env_name == "prod" else cdk.RemovalPolicy.DESTROY
+            ),
+        )
+
+        # ── CloudWatch Log Group (KMS-encrypted) ──────────────────────────────
+        log_group = logs.LogGroup(
+            self,
+            "LambdaLogGroup",
+            log_group_name=f"/aws/lambda/ugsys-admin-panel-{env_name}",
+            retention=logs.RetentionDays.ONE_MONTH,
+            encryption_key=platform_key,
+            removal_policy=cdk.RemovalPolicy.DESTROY,
+        )
+
+        # ── Lambda execution role ─────────────────────────────────────────────
+        execution_role = iam.Role(
+            self,
+            "LambdaExecutionRole",
+            role_name=f"ugsys-admin-panel-lambda-{env_name}",
+            assumed_by=iam.ServicePrincipal("lambda.amazonaws.com"),
+            description="Execution role for ugsys-admin-panel BFF Lambda",
+        )
+
+        execution_role.add_managed_policy(
+            iam.ManagedPolicy.from_aws_managed_policy_name(
+                "service-role/AWSLambdaBasicExecutionRole"
+            )
+        )
+
+        # ECR — pull container image
+        execution_role.add_to_policy(
+            iam.PolicyStatement(
+                sid="ECRPullAccess",
+                effect=iam.Effect.ALLOW,
+                actions=[
+                    "ecr:GetDownloadUrlForLayer",
+                    "ecr:BatchGetImage",
+                    "ecr:BatchCheckLayerAvailability",
+                ],
+                resources=[self.ecr_repo.repository_arn],
+            )
+        )
+        execution_role.add_to_policy(
+            iam.PolicyStatement(
+                sid="ECRAuthToken",
+                effect=iam.Effect.ALLOW,
+                actions=["ecr:GetAuthorizationToken"],
+                resources=["*"],
+            )
+        )
+
+        # DynamoDB — audit log + service registry
+        execution_role.add_to_policy(
+            iam.PolicyStatement(
+                sid="DynamoDBAccess",
+                effect=iam.Effect.ALLOW,
+                actions=[
+                    "dynamodb:GetItem",
+                    "dynamodb:PutItem",
+                    "dynamodb:UpdateItem",
+                    "dynamodb:DeleteItem",
+                    "dynamodb:Query",
+                    "dynamodb:Scan",
+                ],
+                resources=[
+                    self.audit_log_table.table_arn,
+                    f"{self.audit_log_table.table_arn}/index/*",
+                    self.service_registry_table.table_arn,
+                    f"{self.service_registry_table.table_arn}/index/*",
+                ],
+            )
+        )
+
+        # KMS
+        execution_role.add_to_policy(
+            iam.PolicyStatement(
+                sid="KMSAccess",
+                effect=iam.Effect.ALLOW,
+                actions=["kms:Decrypt", "kms:GenerateDataKey*", "kms:DescribeKey"],
+                resources=[platform_key.key_arn],
+            )
+        )
+
+        # EventBridge — publish domain events
+        execution_role.add_to_policy(
+            iam.PolicyStatement(
+                sid="EventBridgePublish",
+                effect=iam.Effect.ALLOW,
+                actions=["events:PutEvents"],
+                resources=[
+                    f"arn:aws:events:{self.region}:{self.account}:event-bus/ugsys-platform-bus"
+                ],
+            )
+        )
+
+        # ── Lambda function (container image) ─────────────────────────────────
+        self.function = lambda_.DockerImageFunction(
+            self,
+            "LambdaFunction",
+            function_name=f"ugsys-admin-panel-{env_name}",
+            code=lambda_.DockerImageCode.from_ecr(
+                self.ecr_repo,
+                tag_or_digest="latest",
+            ),
+            role=execution_role,
+            timeout=cdk.Duration.seconds(30),
+            memory_size=512,
+            environment={
+                "APP_ENV": env_name,
+                "AUDIT_LOG_TABLE_NAME": self.audit_log_table.table_name,
+                "SERVICE_REGISTRY_TABLE_NAME": self.service_registry_table.table_name,
+                "EVENT_BUS_NAME": "ugsys-platform-bus",
+                "LOG_LEVEL": "INFO",
+                "JWT_AUDIENCE": "admin-panel",
+                "JWT_ISSUER": "ugsys-identity-manager",
+            },
+            log_group=log_group,
+            tracing=lambda_.Tracing.ACTIVE,
+        )
+
+        # ── API Gateway HTTP API (BFF) ────────────────────────────────────────
+        self.api = apigwv2.HttpApi(
+            self,
+            "HttpApi",
+            description="ugsys Admin Panel BFF API",
+            cors_preflight=apigwv2.CorsPreflightOptions(
+                allow_origins=[f"https://{domain_name}"],
+                allow_methods=[apigwv2.CorsHttpMethod.ANY],
+                allow_headers=["Content-Type", "Authorization", "X-Request-ID", "Cookie"],
+                allow_credentials=True,
+                max_age=cdk.Duration.days(1),
+            ),
+        )
+
+        self.api.add_routes(
+            path="/{proxy+}",
+            methods=[apigwv2.HttpMethod.ANY],
+            integration=integrations.HttpLambdaIntegration("LambdaIntegration", self.function),
+        )
+
+        # ── S3 bucket (Admin Shell SPA) ───────────────────────────────────────
+        self.shell_bucket = s3.Bucket(
+            self,
+            "ShellBucket",
+            bucket_name=f"ugsys-admin-shell-{env_name}",
+            encryption=s3.BucketEncryption.S3_MANAGED,
+            block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+            versioned=False,
+            removal_policy=(
+                cdk.RemovalPolicy.RETAIN if env_name == "prod" else cdk.RemovalPolicy.DESTROY
+            ),
+            auto_delete_objects=(env_name != "prod"),
+        )
+
+        # ── Outputs always available ──────────────────────────────────────────
+        cdk.CfnOutput(
+            self,
+            "ShellBucketName",
+            value=self.shell_bucket.bucket_name,
+            export_name=f"UgsysAdminShellBucket-{env_name}",
+            description="S3 bucket — sync admin-shell/dist here on deploy",
+        )
+        cdk.CfnOutput(
+            self,
+            "FunctionName",
+            value=self.function.function_name,
+            export_name=f"UgsysAdminPanelFunctionName-{env_name}",
+        )
+        cdk.CfnOutput(
+            self,
+            "EcrRepositoryUri",
+            value=self.ecr_repo.repository_uri,
+            export_name=f"UgsysAdminPanelEcrUri-{env_name}",
+            description="ECR URI — set as ECR_REPOSITORY_URI secret in the service repo",
+        )
+        cdk.CfnOutput(
+            self,
+            "ApiUrl",
+            value=self.api.api_endpoint,
+            export_name=f"UgsysAdminPanelApiUrl-{env_name}",
+        )
+
+        # ── CloudFront + Route53 — only when certificate_arn is provided ──────
+        if not certificate_arn:
+            return
+
+        certificate = acm.Certificate.from_certificate_arn(self, "Certificate", certificate_arn)
+
+        # Response headers policy
+        response_headers_policy = cloudfront.ResponseHeadersPolicy(
+            self,
+            "SecurityHeadersPolicy",
+            response_headers_policy_name=f"ugsys-admin-security-{env_name}",
+            security_headers_behavior=cloudfront.ResponseSecurityHeadersBehavior(
+                content_type_options=cloudfront.ResponseHeadersContentTypeOptions(override=True),
+                frame_options=cloudfront.ResponseHeadersFrameOptions(
+                    frame_option=cloudfront.HeadersFrameOption.DENY,
+                    override=True,
+                ),
+                referrer_policy=cloudfront.ResponseHeadersReferrerPolicy(
+                    referrer_policy=cloudfront.HeadersReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN,
+                    override=True,
+                ),
+                strict_transport_security=cloudfront.ResponseHeadersStrictTransportSecurity(
+                    access_control_max_age=cdk.Duration.days(365),
+                    include_subdomains=True,
+                    preload=True,
+                    override=True,
+                ),
+                xss_protection=cloudfront.ResponseHeadersXSSProtection(
+                    protection=False,
+                    override=True,
+                ),
+                content_security_policy=cloudfront.ResponseHeadersContentSecurityPolicy(
+                    content_security_policy=(
+                        "default-src 'self'; "
+                        f"connect-src 'self' https://{domain_name}/api/v1 https://auth.{DOMAIN}; "
+                        "img-src 'self' data: https:; "
+                        "style-src 'self' 'unsafe-inline'; "
+                        "script-src 'self'; "
+                        "font-src 'self'; "
+                        "frame-ancestors 'none'; "
+                        "base-uri 'self'; "
+                        "form-action 'self'"
+                    ),
+                    override=True,
+                ),
+            ),
+        )
+
+        # API Gateway origin (BFF)
+        api_origin = origins.HttpOrigin(
+            f"{self.api.api_id}.execute-api.{self.region}.amazonaws.com",
+            protocol_policy=cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
+        )
+
+        # CloudFront distribution
+        self.distribution = cloudfront.Distribution(
+            self,
+            "Distribution",
+            comment=f"ugsys admin panel — {domain_name}",
+            domain_names=[domain_name],
+            certificate=certificate,
+            default_root_object="index.html",
+            error_responses=[
+                cloudfront.ErrorResponse(
+                    http_status=403,
+                    response_http_status=200,
+                    response_page_path="/index.html",
+                    ttl=cdk.Duration.seconds(0),
+                ),
+                cloudfront.ErrorResponse(
+                    http_status=404,
+                    response_http_status=200,
+                    response_page_path="/index.html",
+                    ttl=cdk.Duration.seconds(0),
+                ),
+            ],
+            # Default: serve SPA from S3
+            default_behavior=cloudfront.BehaviorOptions(
+                origin=origins.S3BucketOrigin.with_origin_access_control(self.shell_bucket),
+                viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+                cache_policy=cloudfront.CachePolicy.CACHING_DISABLED,
+                response_headers_policy=response_headers_policy,
+                allowed_methods=cloudfront.AllowedMethods.ALLOW_GET_HEAD,
+                compress=True,
+            ),
+            additional_behaviors={
+                # Hashed assets — cache 1 year
+                "/assets/*": cloudfront.BehaviorOptions(
+                    origin=origins.S3BucketOrigin.with_origin_access_control(self.shell_bucket),
+                    viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+                    cache_policy=cloudfront.CachePolicy.CACHING_OPTIMIZED,
+                    response_headers_policy=response_headers_policy,
+                    allowed_methods=cloudfront.AllowedMethods.ALLOW_GET_HEAD,
+                    compress=True,
+                ),
+                # BFF API — forward to Lambda, no caching
+                "/api/v1/*": cloudfront.BehaviorOptions(
+                    origin=api_origin,
+                    viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+                    cache_policy=cloudfront.CachePolicy.CACHING_DISABLED,
+                    origin_request_policy=cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+                    allowed_methods=cloudfront.AllowedMethods.ALLOW_ALL,
+                    compress=False,
+                ),
+            },
+            price_class=cloudfront.PriceClass.PRICE_CLASS_100,
+            minimum_protocol_version=cloudfront.SecurityPolicyProtocol.TLS_V1_2_2021,
+            enable_logging=True,
+        )
+
+        # Route53 alias
+        route53.ARecord(
+            self,
+            "AliasRecord",
+            zone=hosted_zone,
+            record_name=domain_name,
+            target=route53.RecordTarget.from_alias(
+                route53_targets.CloudFrontTarget(self.distribution)
+            ),
+        )
+
+        cdk.CfnOutput(
+            self,
+            "DistributionId",
+            value=self.distribution.distribution_id,
+            export_name=f"UgsysAdminPanelDistributionId-{env_name}",
+            description="CloudFront distribution ID — use for cache invalidation on deploy",
+        )
+        cdk.CfnOutput(
+            self,
+            "AdminPanelUrl",
+            value=f"https://{domain_name}",
+            export_name=f"UgsysAdminPanelUrl-{env_name}",
+        )
