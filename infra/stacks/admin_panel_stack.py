@@ -211,6 +211,8 @@ class AdminPanelStack(cdk.Stack):
         )
 
         # ── Lambda function (container image) ─────────────────────────────────
+        # Pulls from ECR. The deploy workflow ensures a valid image exists in ECR
+        # before this stack is deployed (pushes a placeholder on first run if needed).
         self.function = lambda_.DockerImageFunction(
             self,
             "LambdaFunction",
@@ -266,7 +268,9 @@ class AdminPanelStack(cdk.Stack):
             removal_policy=(
                 cdk.RemovalPolicy.RETAIN if env_name == "prod" else cdk.RemovalPolicy.DESTROY
             ),
-            auto_delete_objects=(env_name != "prod"),
+            # auto_delete_objects intentionally omitted — avoids CDK injecting a
+            # Lambda-backed custom resource just to empty the bucket on stack teardown.
+            # Empty the bucket manually before destroying the stack in non-prod.
         )
 
         # ── Outputs always available ──────────────────────────────────────────

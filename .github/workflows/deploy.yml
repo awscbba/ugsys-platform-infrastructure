@@ -110,6 +110,27 @@ jobs:
       - name: Install CDK
         run: npm install -g aws-cdk
 
+      - name: Bootstrap ECR with placeholder image (first deploy only)
+        run: |
+          ECR_URI="${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/ugsys-admin-panel"
+          # Ensure ECR repo exists and has at least one image tagged "latest"
+          # so the Lambda stack can be created. Skip if image already exists.
+          aws ecr describe-images --repository-name ugsys-admin-panel \
+            --image-ids imageTag=latest --region ${{ env.AWS_REGION }} 2>/dev/null && {
+            echo "ECR image already exists — skipping placeholder push"
+          } || {
+            echo "No image found — pushing placeholder to ECR"
+            aws ecr get-login-password --region ${{ env.AWS_REGION }} \
+              | docker login --username AWS --password-stdin "$ECR_URI"
+            docker pull public.ecr.aws/lambda/python:3.13
+            docker tag public.ecr.aws/lambda/python:3.13 "$ECR_URI:latest"
+            docker push "$ECR_URI:latest"
+          }
+        continue-on-error: true
+        # continue-on-error: ECR repo may not exist yet on very first deploy;
+        # CDK will create it in the same deploy run, then the admin-panel
+        # deploy workflow will push the real image.
+
       - name: CDK deploy
         run: |
           uv run cdk deploy --app "python infra/app.py" \
