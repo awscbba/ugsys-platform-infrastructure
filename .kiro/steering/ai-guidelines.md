@@ -75,7 +75,7 @@ ugsys-<service>/
 │   ├── unit/                    # Pure unit tests, no AWS
 │   └── integration/             # moto-based DynamoDB tests
 ├── scripts/
-│   ├── hooks/                   # pre-commit
+│   ├── hooks/                   # pre-commit (+ pre-push for full-stack services)
 │   └── install-hooks.sh
 ├── .github/workflows/
 │   ├── ci.yml                   # lint, typecheck, test, sast, secret-scan, arch-guard
@@ -152,8 +152,22 @@ ugsys-auth-client = { git = "https://github.com/awscbba/ugsys-shared-libs", tag 
 - Slack success/failure notification
 
 ### Git hooks (install via `just install-hooks`)
+
+Choose the pattern based on service type:
+
+**Backend-only services** (identity-manager, user-profile-service, projects-registry):
 - `pre-commit`: blocks commits to `main`; ruff lint + format + unit tests
+- `pre-push`: mypy strict type-check
+- Simpler workflow, suitable for services with fast test suites
+
+**Full-stack services** (admin-panel with frontend + backend):
+- `pre-commit`: blocks commits to `main`; ruff lint + format (Python) + ESLint + Prettier (TypeScript)
+- `pre-push`: mypy + pytest (Python) + tsc + vitest (TypeScript) with 80% coverage gates
+- Keeps commits fast while ensuring comprehensive checks before push
+
+**Rules for both patterns:**
 - Never bypass with `--no-verify`
+- All hooks must block direct commits/pushes to `main`
 
 ## Emergency Procedures
 

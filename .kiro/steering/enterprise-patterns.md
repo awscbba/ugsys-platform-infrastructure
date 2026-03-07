@@ -943,6 +943,7 @@ class ProjectListQuery:
         ])
 ```
 
+
 ### Repository port uses the query object
 
 ```python
@@ -1019,6 +1020,7 @@ class DynamoDBProjectRepository(ProjectRepository):
             values[":date_to"] = {"S": query.date_to}
         return parts, values
 ```
+
 
 ### Presentation layer — query params to query object
 

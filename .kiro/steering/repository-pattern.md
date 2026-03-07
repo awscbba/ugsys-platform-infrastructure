@@ -78,6 +78,7 @@ class IdentityClient(ABC):
     # returns user_id
 ```
 
+
 ---
 
 ## 3. Concrete Implementation (Infrastructure Layer)
@@ -211,6 +212,7 @@ class DynamoDBUserRepository(UserRepository):
             error_code="REPOSITORY_ERROR",
         )
 ```
+
 
 ### 3.2 Serialization Rules
 
