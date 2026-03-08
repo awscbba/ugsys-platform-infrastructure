@@ -6,6 +6,7 @@ on:
     paths-ignore:
       - "*.md"
       - ".gitignore"
+      - ".kiro/**"
 
   # Allow manual deploy with optional env override
   workflow_dispatch:
