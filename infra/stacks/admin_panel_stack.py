@@ -34,6 +34,7 @@ import aws_cdk.aws_logs as logs
 import aws_cdk.aws_route53 as route53
 import aws_cdk.aws_route53_targets as route53_targets
 import aws_cdk.aws_s3 as s3
+import aws_cdk.aws_secretsmanager as secretsmanager
 from constructs import Construct
 
 CUSTOM_DOMAIN = "admin.apps.cloud.org.bo"
@@ -196,6 +197,20 @@ class AdminPanelStack(cdk.Stack):
             )
         )
 
+        # ── Secrets Manager — JWT public key (RS256) ──────────────────────────
+        # The public key is stored alongside the private key in the identity-manager
+        # JWT keys secret. We read it at synth time via a dynamic reference so that
+        # key rotation (updating the secret) is reflected on the next deploy without
+        # any stack changes.
+        jwt_keys_secret = secretsmanager.Secret.from_secret_name_v2(
+            self,
+            "JwtKeysSecret",
+            f"ugsys-identity-manager-jwt-keys-{env_name}",
+        )
+
+        # Grant Lambda read access to the secret.
+        jwt_keys_secret.grant_read(execution_role)
+
         # ── Lambda function (container image) ─────────────────────────────────
         # Pulls from ECR. The deploy workflow ensures a valid image exists in ECR
         # before this stack is deployed (pushes a placeholder on first run if needed).
@@ -218,6 +233,17 @@ class AdminPanelStack(cdk.Stack):
                 "LOG_LEVEL": "INFO",
                 "JWT_AUDIENCE": "admin-panel",
                 "JWT_ISSUER": "ugsys-identity-manager",
+                # Identity Manager base URL — used by the BFF to forward auth requests.
+                "IDENTITY_MANAGER_BASE_URL": (
+                    "https://auth.apps.cloud.org.bo"
+                    if env_name == "prod"
+                    else f"https://auth.dev.{DOMAIN}"
+                ),
+                # RS256 public key — resolved from Secrets Manager at deploy time.
+                # The Lambda reads this env var to verify JWT signatures.
+                "JWT_PUBLIC_KEY": jwt_keys_secret.secret_value_from_json(
+                    "public_key"
+                ).unsafe_unwrap(),
             },
             log_group=log_group,
             tracing=lambda_.Tracing.ACTIVE,
