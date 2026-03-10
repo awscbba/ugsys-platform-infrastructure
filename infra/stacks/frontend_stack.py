@@ -107,7 +107,8 @@ class FrontendStack(cdk.Stack):
                 content_security_policy=cloudfront.ResponseHeadersContentSecurityPolicy(
                     content_security_policy=(
                         "default-src 'self'; "
-                        f"connect-src 'self' https://api.{DOMAIN}; "
+                        # api.* — registry API; auth.* — identity-manager (login/register/refresh)
+                        f"connect-src 'self' https://api.{DOMAIN} https://auth.{DOMAIN}; "
                         "img-src 'self' data: https:; "
                         "style-src 'self' 'unsafe-inline'; "
                         "script-src 'self'; "
