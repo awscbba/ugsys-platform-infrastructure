@@ -5,11 +5,27 @@ Resources:
   - ECR repository: ugsys-identity-manager
   - DynamoDB table: ugsys-identity-manager-users-{env}
   - DynamoDB table: ugsys-identity-{env}-token-blacklist  (JWT revocation, TTL-enabled)
-  - Secrets Manager secret: ugsys-identity-manager-jwt-secret-{env}
+  - Secrets Manager secret: ugsys-identity-manager-jwt-keys-{env}  (RSA key pair PEM)
   - Lambda function (container image): ugsys-identity-manager-{env}
   - API Gateway HTTP API: ugsys-identity-manager-{env}
   - CloudWatch Log Group (KMS-encrypted)
   - IAM execution role (least privilege)
+
+JWT key pair secret schema:
+  {
+    "private_key": "<PEM-encoded RSA-2048 private key>",
+    "public_key":  "<PEM-encoded RSA-2048 public key>",
+    "key_id":      "<kid — short identifier used in JWKS, e.g. 'ugsys-2024-01'>"
+  }
+
+  The secret is created empty by CDK (no auto-generate — RSA keys cannot be auto-generated
+  by Secrets Manager). After first deploy, populate it once with:
+
+    scripts/rotate-jwt-keys.sh prod
+
+  That script generates a fresh RSA-2048 key pair and stores it in the secret.
+  The Lambda reads the secret at cold-start; a key rotation requires a Lambda redeploy
+  (or function restart) to pick up the new keys.
 """
 
 import aws_cdk as cdk
@@ -104,17 +120,18 @@ class IdentityManagerStack(cdk.Stack):
             ),
         )
 
-        # ── Secrets Manager — JWT signing secret ──────────────────────────────
+        # ── Secrets Manager — JWT RS256 key pair ──────────────────────────────
+        # Stores RSA-2048 private + public key PEM and a key_id (kid).
+        # CDK creates the secret shell; the actual key pair is populated once via:
+        #   scripts/rotate-jwt-keys.sh {env}
+        # Schema: { "private_key": "...", "public_key": "...", "key_id": "..." }
         jwt_secret = secretsmanager.Secret(
             self,
             "JwtSecret",
-            secret_name=f"ugsys-identity-manager-jwt-secret-{env_name}",
-            description="JWT HS256 signing secret for ugsys-identity-manager",
-            generate_secret_string=secretsmanager.SecretStringGenerator(
-                secret_string_template="{}",
-                generate_string_key="jwt_secret_key",
-                password_length=64,
-                exclude_punctuation=True,
+            secret_name=f"ugsys-identity-manager-jwt-keys-{env_name}",
+            description="JWT RS256 key pair (private + public PEM) for ugsys-identity-manager",
+            secret_string_value=cdk.SecretValue.unsafe_plain_text(
+                '{"private_key":"REPLACE_ME","public_key":"REPLACE_ME","key_id":"ugsys-v1"}'
             ),
             encryption_key=platform_key,
             removal_policy=(
@@ -219,10 +236,10 @@ class IdentityManagerStack(cdk.Stack):
             )
         )
 
-        # Secrets Manager — read JWT secret only
+        # Secrets Manager — read JWT key pair secret
         execution_role.add_to_policy(
             iam.PolicyStatement(
-                sid="SecretsManagerJwtSecret",
+                sid="SecretsManagerJwtKeys",
                 effect=iam.Effect.ALLOW,
                 actions=["secretsmanager:GetSecretValue"],
                 resources=[jwt_secret.secret_arn],
@@ -263,8 +280,8 @@ class IdentityManagerStack(cdk.Stack):
                 "TOKEN_BLACKLIST_TABLE_NAME": self.token_blacklist_table.table_name,
                 "EVENT_BUS_NAME": "ugsys-platform-bus",
                 "LOG_LEVEL": "INFO",
-                "JWT_ALGORITHM": "HS256",
-                "SECRETS_MANAGER_JWT_SECRET_ARN": jwt_secret.secret_arn,
+                "JWT_ALGORITHM": "RS256",
+                "JWT_KEYS_SECRET_ARN": jwt_secret.secret_arn,
             },
             log_group=log_group,
             tracing=lambda_.Tracing.ACTIVE,
@@ -352,8 +369,8 @@ class IdentityManagerStack(cdk.Stack):
         )
         cdk.CfnOutput(
             self,
-            "JwtSecretArn",
+            "JwtKeysSecretArn",
             value=jwt_secret.secret_arn,
-            export_name=f"UgsysIdentityManagerJwtSecretArn-{env_name}",
-            description="JWT signing secret ARN — do not log this value",
+            export_name=f"UgsysIdentityManagerJwtKeysArn-{env_name}",
+            description="JWT RS256 key pair secret ARN — do not log this value",
         )
