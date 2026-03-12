@@ -146,6 +146,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: [changes]
     if: github.event_name == 'pull_request' && needs.changes.outputs.any_code == 'true'
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
         with:
