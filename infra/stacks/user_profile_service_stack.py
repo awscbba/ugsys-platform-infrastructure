@@ -214,9 +214,20 @@ class UserProfileServiceStack(cdk.Stack):
             ),
         )
 
+        # Explicitly list methods — do NOT include OPTIONS.
+        # When OPTIONS is included in a /{proxy+} route, API Gateway forwards preflights
+        # to Lambda instead of handling them natively via cors_preflight config above.
+        # Lambda (FastAPI with no CORSMiddleware) returns 405, causing CORS failures.
         self.api.add_routes(
             path="/{proxy+}",
-            methods=[apigwv2.HttpMethod.ANY],
+            methods=[
+                apigwv2.HttpMethod.GET,
+                apigwv2.HttpMethod.POST,
+                apigwv2.HttpMethod.PUT,
+                apigwv2.HttpMethod.PATCH,
+                apigwv2.HttpMethod.DELETE,
+                apigwv2.HttpMethod.HEAD,
+            ],
             integration=integrations.HttpLambdaIntegration("LambdaIntegration", self.function),
         )
 
