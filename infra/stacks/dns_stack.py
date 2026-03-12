@@ -19,6 +19,8 @@ SUBDOMAINS = [
     "auth",
     "api",
     "registry",
+    "profile",
+    "profiles",
     "admin",
     "messaging",
 ]
