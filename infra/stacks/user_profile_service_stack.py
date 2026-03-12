@@ -202,9 +202,14 @@ class UserProfileServiceStack(cdk.Stack):
             "HttpApi",
             description="ugsys User Profile Service API",
             cors_preflight=apigwv2.CorsPreflightOptions(
-                allow_origins=["https://registry.apps.cloud.org.bo"],
+                allow_origins=[
+                    "https://profile.apps.cloud.org.bo",
+                    "https://registry.apps.cloud.org.bo",
+                    "https://admin.apps.cloud.org.bo",
+                ],
                 allow_methods=[apigwv2.CorsHttpMethod.ANY],
-                allow_headers=["Content-Type", "Authorization", "X-Request-ID"],
+                allow_headers=["Content-Type", "Authorization", "X-Request-ID", "X-CSRF-Token"],
+                allow_credentials=True,
                 max_age=cdk.Duration.days(1),
             ),
         )
