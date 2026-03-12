@@ -258,6 +258,14 @@ class IdentityManagerStack(cdk.Stack):
             )
         )
 
+        # All ugsys frontends that call the identity-manager directly.
+        # Keep in sync with ALLOWED_ORIGINS Lambda env var and cors_preflight below.
+        _cors_origins = [
+            "https://registry.apps.cloud.org.bo",
+            "https://profile.apps.cloud.org.bo",
+            "https://admin.apps.cloud.org.bo",
+        ]
+
         # ── Lambda function (container image) ─────────────────────────────────
         # CI/CD pushes a new image to ECR then calls:
         #   aws lambda update-function-code --image-uri <ecr-uri>:<sha>
@@ -282,6 +290,8 @@ class IdentityManagerStack(cdk.Stack):
                 "LOG_LEVEL": "INFO",
                 "JWT_ALGORITHM": "RS256",
                 "JWT_KEYS_SECRET_ARN": jwt_secret.secret_arn,
+                # Keep in sync with cors_preflight allow_origins above
+                "ALLOWED_ORIGINS": ",".join(_cors_origins),
             },
             log_group=log_group,
             tracing=lambda_.Tracing.ACTIVE,
@@ -293,9 +303,15 @@ class IdentityManagerStack(cdk.Stack):
             "HttpApi",
             description="ugsys Identity Manager API",
             cors_preflight=apigwv2.CorsPreflightOptions(
-                allow_origins=["https://registry.apps.cloud.org.bo"],
+                allow_origins=_cors_origins,
                 allow_methods=[apigwv2.CorsHttpMethod.ANY],
-                allow_headers=["Content-Type", "Authorization", "X-Request-ID"],
+                allow_headers=[
+                    "Content-Type",
+                    "Authorization",
+                    "X-Request-ID",
+                    "X-CSRF-Token",
+                ],
+                allow_credentials=True,
                 max_age=cdk.Duration.days(1),
             ),
         )
