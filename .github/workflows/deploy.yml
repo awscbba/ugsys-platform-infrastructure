@@ -75,6 +75,7 @@ jobs:
             UgsysAdminPanelEcr-${{ env.CDK_ENV }} \
             UgsysAdminPanel-${{ env.CDK_ENV }} \
             UgsysFrontend-${{ env.CDK_ENV }} \
+            UgsysProfileFrontend-${{ env.CDK_ENV }} \
             2>&1 || true
         # || true — diff exits 1 when there are changes, which is expected
         # UgsysPlatformDns is intentionally excluded — it has a stable cross-stack
@@ -250,6 +251,7 @@ jobs:
             UgsysAdminPanelEcr-${{ env.CDK_ENV }} \
             UgsysAdminPanel-${{ env.CDK_ENV }} \
             UgsysFrontend-${{ env.CDK_ENV }} \
+            UgsysProfileFrontend-${{ env.CDK_ENV }} \
             --require-approval never \
             --outputs-file cdk-outputs.json
         # UgsysPlatformDns is intentionally excluded — stable cross-stack export,
