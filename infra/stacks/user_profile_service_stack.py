@@ -24,6 +24,7 @@ import aws_cdk.aws_lambda as lambda_
 import aws_cdk.aws_logs as logs
 import aws_cdk.aws_route53 as route53
 import aws_cdk.aws_route53_targets as route53_targets
+import aws_cdk.aws_secretsmanager as secretsmanager
 from constructs import Construct
 
 CUSTOM_DOMAIN = "profiles.apps.cloud.org.bo"
@@ -173,6 +174,14 @@ class UserProfileServiceStack(cdk.Stack):
             )
         )
 
+        # JWT public key — resolved from identity-manager's Secrets Manager secret at deploy time.
+        # Injected as env var so Lambda verifies tokens without a runtime Secrets Manager call.
+        jwt_keys_secret = secretsmanager.Secret.from_secret_name_v2(
+            self,
+            "JwtKeysSecret",
+            f"ugsys-identity-manager-jwt-keys-{env_name}",
+        )
+
         # ── Lambda function (container image) ─────────────────────────────────
         self.function = lambda_.DockerImageFunction(
             self,
@@ -190,6 +199,9 @@ class UserProfileServiceStack(cdk.Stack):
                 "DYNAMODB_TABLE_PREFIX": "ugsys",
                 "ENVIRONMENT": env_name,
                 "EVENT_BUS_NAME": "ugsys-platform-bus",
+                "JWT_PUBLIC_KEY": jwt_keys_secret.secret_value_from_json(
+                    "public_key"
+                ).unsafe_unwrap(),
                 "LOG_LEVEL": "INFO",
             },
             log_group=log_group,
