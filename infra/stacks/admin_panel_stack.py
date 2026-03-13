@@ -355,7 +355,7 @@ class AdminPanelStack(cdk.Stack):
                         "img-src 'self' data: https:; "
                         "style-src 'self' 'unsafe-inline'; "
                         "script-src 'self'; "
-                        "font-src 'self'; "
+                        "font-src 'self' data:; "
                         "frame-ancestors 'none'; "
                         "base-uri 'self'; "
                         "form-action 'self'"
