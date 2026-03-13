@@ -202,6 +202,7 @@ class UserProfileServiceStack(cdk.Stack):
                 "JWT_PUBLIC_KEY": jwt_keys_secret.secret_value_from_json(
                     "public_key"
                 ).unsafe_unwrap(),
+                "JWT_KEY_ID": jwt_keys_secret.secret_value_from_json("key_id").unsafe_unwrap(),
                 "LOG_LEVEL": "INFO",
             },
             log_group=log_group,
