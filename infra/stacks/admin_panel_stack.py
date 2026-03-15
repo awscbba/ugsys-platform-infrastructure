@@ -239,6 +239,12 @@ class AdminPanelStack(cdk.Stack):
                     if env_name == "prod"
                     else f"https://auth.dev.{DOMAIN}"
                 ),
+                # User Profile Service base URL — used by the BFF to proxy profile requests.
+                "USER_PROFILE_SERVICE_BASE_URL": (
+                    "https://profile.apps.cloud.org.bo"
+                    if env_name == "prod"
+                    else f"https://profile.dev.{DOMAIN}"
+                ),
                 # RS256 public key — resolved from Secrets Manager at deploy time.
                 # The Lambda reads this env var to verify JWT signatures.
                 "JWT_PUBLIC_KEY": jwt_keys_secret.secret_value_from_json(
