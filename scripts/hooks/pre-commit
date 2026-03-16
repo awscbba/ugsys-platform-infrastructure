@@ -47,7 +47,7 @@ if [ -n "$STAGED_PY" ]; then
     STAGED_INFRA=$(echo "$STAGED_PY" | grep '^infra/' || true)
     if [ -n "$STAGED_INFRA" ]; then
         echo "▶ cdk synth (validates all stacks) ..."
-        if ! JSII_SILENCE_WARNING_UNTESTED_NODE_VERSION=1 uv run cdk synth --app "python infra/app.py"; then
+        if ! JSII_SILENCE_WARNING_UNTESTED_NODE_VERSION=1 npx aws-cdk synth --app "uv run python infra/app.py"; then
             echo "✗ CDK synth failed — fix stack errors before committing."
             exit 1
         fi

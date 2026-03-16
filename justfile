@@ -36,14 +36,15 @@ format-check:
 # ── CDK (all run from infra/ where cdk.json lives) ───────────────────────────
 
 # Synthesize all stacks — validates without deploying
+# Uses npx aws-cdk to avoid conflicts with other tools named 'cdk' on PATH.
 synth:
-    JSII_SILENCE_WARNING_UNTESTED_NODE_VERSION=1 uv run cdk synth --app "python infra/app.py"
+    JSII_SILENCE_WARNING_UNTESTED_NODE_VERSION=1 npx aws-cdk synth --app "uv run python infra/app.py"
 
 # Bootstrap CDK in your AWS account (one-time per account/region)
 # Usage: just bootstrap <account_id> [region] [env]
 bootstrap account region="us-east-1" env="prod":
     @echo "=== CDK Bootstrap (account={{account}}, region={{region}}, env={{env}}) ==="
-    cd infra && uv run cdk bootstrap aws://{{account}}/{{region}} \
+    cd infra && npx aws-cdk bootstrap aws://{{account}}/{{region}} \
         --context env={{env}} \
         --context account={{account}} \
         --context region={{region}}
@@ -54,7 +55,7 @@ bootstrap account region="us-east-1" env="prod":
 # Usage: just deploy-oidc <account_id> [region] [env]
 deploy-oidc account region="us-east-1" env="prod":
     @echo "=== Deploying OIDC stack (account={{account}}, region={{region}}, env={{env}}) ==="
-    cd infra && uv run cdk deploy UgsysPlatformGithubOidc-{{env}} \
+    cd infra && npx aws-cdk deploy UgsysPlatformGithubOidc-{{env}} \
         --context env={{env}} \
         --context account={{account}} \
         --context region={{region}} \
@@ -67,7 +68,7 @@ deploy-oidc account region="us-east-1" env="prod":
 # Show diff against deployed state
 # Usage: just diff <account_id> [region] [env]
 diff account region="us-east-1" env="prod":
-    cd infra && uv run cdk diff --all \
+    cd infra && npx aws-cdk diff --all \
         --context env={{env}} \
         --context account={{account}} \
         --context region={{region}} \
@@ -77,7 +78,7 @@ diff account region="us-east-1" env="prod":
 # Usage: just deploy <account_id> [region] [env]
 deploy account region="us-east-1" env="prod":
     @echo "=== CDK Deploy all (account={{account}}, region={{region}}, env={{env}}) ==="
-    cd infra && uv run cdk deploy --all \
+    cd infra && npx aws-cdk deploy --all \
         --context env={{env}} \
         --context account={{account}} \
         --context region={{region}} \
@@ -89,7 +90,7 @@ deploy account region="us-east-1" env="prod":
 # Usage: just destroy <account_id> [region] [env]
 destroy account region="us-east-1" env="dev":
     @echo "=== CDK Destroy all (account={{account}}, region={{region}}, env={{env}}) ==="
-    cd infra && uv run cdk destroy --all \
+    cd infra && npx aws-cdk destroy --all \
         --context env={{env}} \
         --context account={{account}} \
         --context region={{region}}
@@ -98,7 +99,7 @@ destroy account region="us-east-1" env="dev":
 
 # IaC security scan with Checkov (runs synth first)
 iac-scan:
-    cd infra && uv run cdk synth --quiet
+    cd infra && npx aws-cdk synth --app "uv run python app.py" --quiet
     uv tool run checkov -d infra/cdk.out --framework cloudformation --soft-fail || true
 
 # Static security scan with Bandit
