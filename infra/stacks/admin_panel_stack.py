@@ -240,10 +240,11 @@ class AdminPanelStack(cdk.Stack):
                     else f"https://auth.dev.{DOMAIN}"
                 ),
                 # User Profile Service base URL — used by the BFF to proxy profile requests.
+                # API lives at profiles.apps.cloud.org.bo (NOT profile.* which is the SPA frontend).
                 "USER_PROFILE_SERVICE_BASE_URL": (
-                    "https://profile.apps.cloud.org.bo"
+                    "https://profiles.apps.cloud.org.bo"
                     if env_name == "prod"
-                    else f"https://profile.dev.{DOMAIN}"
+                    else f"https://profiles.dev.{DOMAIN}"
                 ),
                 # RS256 public key — resolved from Secrets Manager at deploy time.
                 # The Lambda reads this env var to verify JWT signatures.
