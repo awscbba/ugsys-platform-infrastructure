@@ -1,4 +1,4 @@
-# ugsys-platform-infrastructure task runner
+# ugsys-platform-infrastructure task runner.
 # Run all commands from inside the repo root: cd ugsys-platform-infrastructure && just <recipe>
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
