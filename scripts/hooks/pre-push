@@ -39,7 +39,7 @@ fi
 echo ""
 
 echo "▶ cdk synth (validates all stacks) ..."
-if ! JSII_SILENCE_WARNING_UNTESTED_NODE_VERSION=1 uv run cdk synth --app "python infra/app.py"; then
+if ! JSII_SILENCE_WARNING_UNTESTED_NODE_VERSION=1 npx aws-cdk synth --app "uv run python infra/app.py"; then
     echo "✗ CDK synth failed. Run 'just synth' for details."
     FAILED=1
 else
