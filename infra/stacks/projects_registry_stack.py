@@ -28,6 +28,7 @@ import aws_cdk.aws_logs as logs
 import aws_cdk.aws_route53 as route53
 import aws_cdk.aws_route53_targets as route53_targets
 import aws_cdk.aws_s3 as s3
+import aws_cdk.aws_secretsmanager as secretsmanager
 from constructs import Construct
 
 CUSTOM_DOMAIN = "api.apps.cloud.org.bo"
@@ -44,9 +45,40 @@ class ProjectsRegistryStack(cdk.Stack):
         platform_key: kms.IKey,
         hosted_zone: route53.IHostedZone,
         certificate_arn: str,
+        identity_manager_service_accounts_secret_arn: str,
         **kwargs: object,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
+
+        # ── Secrets Manager — Identity Manager S2S client secret ──────────────
+        # Stores the plaintext client_secret that projects-registry uses to obtain
+        # a service token from identity-manager via client_credentials grant.
+        # CDK creates the secret shell; populate once after first deploy:
+        #   aws secretsmanager put-secret-value \
+        #     --secret-id <arn> \
+        #     --secret-string '{"client_secret":"<plaintext_secret>"}'
+        # The matching bcrypt hash must be stored in the identity-manager
+        # service accounts secret (ugsys-identity-manager-service-accounts-{env}).
+        im_client_secret = secretsmanager.Secret(
+            self,
+            "ImClientSecret",
+            secret_name=f"ugsys-projects-registry-im-client-{env_name}",
+            description="Identity Manager S2S client secret for ugsys-projects-registry",
+            secret_string_value=cdk.SecretValue.unsafe_plain_text('{"client_secret":"REPLACE_ME"}'),
+            encryption_key=platform_key,
+            removal_policy=(
+                cdk.RemovalPolicy.RETAIN if env_name == "prod" else cdk.RemovalPolicy.DESTROY
+            ),
+        )
+
+        # Import the identity-manager service accounts secret by ARN so we can
+        # grant projects-registry read access (needed to verify the secret exists).
+        # The actual value is read by identity-manager, not projects-registry.
+        _im_service_accounts_secret = secretsmanager.Secret.from_secret_complete_arn(
+            self,
+            "ImServiceAccountsSecret",
+            identity_manager_service_accounts_secret_arn,
+        )
 
         # ── ECR Repository ────────────────────────────────────────────────────
         self.ecr_repo = ecr.Repository(
@@ -319,6 +351,19 @@ class ProjectsRegistryStack(cdk.Stack):
             )
         )
 
+        # Secrets Manager — read IM client secret at cold-start
+        execution_role.add_to_policy(
+            iam.PolicyStatement(
+                sid="SecretsManagerImClientSecret",
+                effect=iam.Effect.ALLOW,
+                actions=["secretsmanager:GetSecretValue"],
+                resources=[im_client_secret.secret_arn],
+            )
+        )
+
+        # KMS — decrypt the IM client secret (encrypted with platform key)
+        # (KMSAccess policy above already covers this, kept for clarity)
+
         # ── Lambda function (container image) ─────────────────────────────────
         self.function = lambda_.DockerImageFunction(
             self,
@@ -341,6 +386,10 @@ class ProjectsRegistryStack(cdk.Stack):
                 "S3_IMAGES_BUCKET": self.images_bucket.bucket_name,
                 "EVENT_BUS_NAME": "ugsys-platform-bus",
                 "LOG_LEVEL": "INFO",
+                # Identity Manager S2S — client_credentials grant
+                "IDENTITY_MANAGER_URL": "https://auth.apps.cloud.org.bo",
+                "IDENTITY_MANAGER_CLIENT_ID": "ugsys-projects-registry",
+                "IDENTITY_MANAGER_CLIENT_SECRET_ARN": im_client_secret.secret_arn,
             },
             log_group=log_group,
             tracing=lambda_.Tracing.ACTIVE,
