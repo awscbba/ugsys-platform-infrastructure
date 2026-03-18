@@ -35,6 +35,7 @@ import aws_cdk.aws_route53 as route53
 import aws_cdk.aws_route53_targets as route53_targets
 import aws_cdk.aws_s3 as s3
 import aws_cdk.aws_secretsmanager as secretsmanager
+import aws_cdk.aws_ssm as ssm
 from constructs import Construct
 
 CUSTOM_DOMAIN = "admin.apps.cloud.org.bo"
@@ -153,10 +154,29 @@ class AdminPanelStack(cdk.Stack):
             )
         )
 
-        # DynamoDB — audit log + service registry
+        # DynamoDB — audit log (no Scan — queries must go through actor-index GSI)
         execution_role.add_to_policy(
             iam.PolicyStatement(
-                sid="DynamoDBAccess",
+                sid="DynamoDBAuditLog",
+                effect=iam.Effect.ALLOW,
+                actions=[
+                    "dynamodb:GetItem",
+                    "dynamodb:PutItem",
+                    "dynamodb:UpdateItem",
+                    "dynamodb:DeleteItem",
+                    "dynamodb:Query",
+                ],
+                resources=[
+                    self.audit_log_table.table_arn,
+                    f"{self.audit_log_table.table_arn}/index/*",
+                ],
+            )
+        )
+
+        # DynamoDB — service registry (Scan allowed: list-all-services use case)
+        execution_role.add_to_policy(
+            iam.PolicyStatement(
+                sid="DynamoDBServiceRegistry",
                 effect=iam.Effect.ALLOW,
                 actions=[
                     "dynamodb:GetItem",
@@ -167,20 +187,21 @@ class AdminPanelStack(cdk.Stack):
                     "dynamodb:Scan",
                 ],
                 resources=[
-                    self.audit_log_table.table_arn,
-                    f"{self.audit_log_table.table_arn}/index/*",
                     self.service_registry_table.table_arn,
                     f"{self.service_registry_table.table_arn}/index/*",
                 ],
             )
         )
 
-        # KMS
+        # KMS — Lambda only decrypts (reads from Secrets Manager + CloudWatch Logs).
+        # GenerateDataKey* is not needed: DynamoDB uses AWS_MANAGED encryption (not
+        # the platform key), and CloudWatch log encryption is handled by the log group
+        # service principal, not the Lambda execution role.
         execution_role.add_to_policy(
             iam.PolicyStatement(
                 sid="KMSAccess",
                 effect=iam.Effect.ALLOW,
-                actions=["kms:Decrypt", "kms:GenerateDataKey*", "kms:DescribeKey"],
+                actions=["kms:Decrypt", "kms:DescribeKey"],
                 resources=[platform_key.key_arn],
             )
         )
@@ -210,6 +231,33 @@ class AdminPanelStack(cdk.Stack):
 
         # Grant Lambda read access to the secret.
         jwt_keys_secret.grant_read(execution_role)
+
+        # ── SSM Parameter — CSP script origins (mutable config) ───────────────
+        # Stored in Parameter Store so it can be updated without a CDK deploy.
+        # Lambda reads it at runtime with a 5-minute TTL cache.
+        # CDK creates the parameter with a placeholder on first deploy only;
+        # subsequent deploys do NOT overwrite the value (retain_value=True).
+        # The deploy-bff.yml workflow writes the real value from GitHub Secrets
+        # via `aws ssm put-parameter --overwrite` on every BFF deploy.
+        csp_param_name = f"/ugsys/admin-panel/{env_name}/csp-script-origins"
+        csp_param = ssm.StringParameter(
+            self,
+            "CspScriptOriginsParam",
+            parameter_name=csp_param_name,
+            string_value="placeholder",  # overwritten by deploy-bff.yml on first real deploy
+            description="Comma-separated extra script-src origins for the admin panel CSP header",
+            tier=ssm.ParameterTier.STANDARD,
+        )
+
+        # Grant Lambda GetParameter on this specific parameter only
+        execution_role.add_to_policy(
+            iam.PolicyStatement(
+                sid="SSMCspParam",
+                effect=iam.Effect.ALLOW,
+                actions=["ssm:GetParameter"],
+                resources=[csp_param.parameter_arn],
+            )
+        )
 
         # ── Lambda function (container image) ─────────────────────────────────
         # Pulls from ECR. The deploy workflow ensures a valid image exists in ECR
@@ -251,6 +299,10 @@ class AdminPanelStack(cdk.Stack):
                 # CloudFormation dynamic reference limitation where Lambda receives the
                 # literal {{resolve:secretsmanager:...}} string instead of the resolved value.
                 "JWT_KEYS_SECRET_ARN": jwt_keys_secret.secret_arn,
+                # CSP script origins are stored in SSM Parameter Store so they can be
+                # updated without a CDK deploy. Lambda reads the parameter at runtime
+                # with a 5-minute TTL cache. Only the parameter NAME is baked in here.
+                "CSP_SCRIPT_ORIGINS_PARAM": csp_param_name,
             },
             log_group=log_group,
             tracing=lambda_.Tracing.ACTIVE,
