@@ -139,6 +139,26 @@ class IdentityManagerStack(cdk.Stack):
             ),
         )
 
+        # ── Secrets Manager — Service accounts (S2S client_credentials) ───────
+        # Stores the service accounts map used by the client_credentials grant.
+        # Schema: { "<client_id>": { "secret": "<bcrypt_hash>", "roles": ["service"] } }
+        # CDK creates the secret shell; populate once after first deploy:
+        #   aws secretsmanager put-secret-value \
+        #     --secret-id <arn> \
+        #     --secret-string '{"ugsys-projects-registry":{"secret":"<hash>","roles":["service"]}}'
+        service_accounts_secret = secretsmanager.Secret(
+            self,
+            "ServiceAccountsSecret",
+            secret_name=f"ugsys-identity-manager-service-accounts-{env_name}",
+            description="S2S service accounts map for ugsys-identity-manager",
+            secret_string_value=cdk.SecretValue.unsafe_plain_text("{}"),
+            encryption_key=platform_key,
+            removal_policy=(
+                cdk.RemovalPolicy.RETAIN if env_name == "prod" else cdk.RemovalPolicy.DESTROY
+            ),
+        )
+        self.service_accounts_secret = service_accounts_secret
+
         # ── CloudWatch Log Group (KMS-encrypted) ──────────────────────────────
         log_group = logs.LogGroup(
             self,
@@ -236,13 +256,13 @@ class IdentityManagerStack(cdk.Stack):
             )
         )
 
-        # Secrets Manager — read JWT key pair secret
+        # Secrets Manager — read JWT key pair secret + service accounts secret
         execution_role.add_to_policy(
             iam.PolicyStatement(
-                sid="SecretsManagerJwtKeys",
+                sid="SecretsManagerAccess",
                 effect=iam.Effect.ALLOW,
                 actions=["secretsmanager:GetSecretValue"],
-                resources=[jwt_secret.secret_arn],
+                resources=[jwt_secret.secret_arn, service_accounts_secret.secret_arn],
             )
         )
 
@@ -305,6 +325,7 @@ class IdentityManagerStack(cdk.Stack):
                 "LOG_LEVEL": "INFO",
                 "JWT_ALGORITHM": "RS256",
                 "JWT_KEYS_SECRET_ARN": jwt_secret.secret_arn,
+                "SERVICE_ACCOUNTS_SECRET_ARN": service_accounts_secret.secret_arn,
                 # Keep in sync with cors_preflight allow_origins above
                 "ALLOWED_ORIGINS": ",".join(_cors_origins),
                 # X-Ray — active tracing for Lambda + SDK patching (boto3, requests, httpx)
@@ -416,4 +437,11 @@ class IdentityManagerStack(cdk.Stack):
             value=jwt_secret.secret_arn,
             export_name=f"UgsysIdentityManagerJwtKeysArn-{env_name}",
             description="JWT RS256 key pair secret ARN — do not log this value",
+        )
+        cdk.CfnOutput(
+            self,
+            "ServiceAccountsSecretArn",
+            value=service_accounts_secret.secret_arn,
+            export_name=f"UgsysIdentityManagerServiceAccountsArn-{env_name}",
+            description="S2S service accounts secret ARN — do not log this value",
         )

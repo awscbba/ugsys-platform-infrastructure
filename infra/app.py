@@ -126,11 +126,13 @@ projects_registry_stack = ProjectsRegistryStack(
     platform_key=security_stack.platform_key,
     hosted_zone=dns_stack.hosted_zone,
     certificate_arn=certificate_arn,
+    identity_manager_service_accounts_secret_arn=identity_manager_stack.service_accounts_secret.secret_arn,
     env=aws_env,
     tags=tags,
 )
 projects_registry_stack.add_dependency(security_stack)
 projects_registry_stack.add_dependency(dns_stack)
+projects_registry_stack.add_dependency(identity_manager_stack)
 
 frontend_stack = FrontendStack(
     app,
