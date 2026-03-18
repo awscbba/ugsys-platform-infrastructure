@@ -246,6 +246,21 @@ class IdentityManagerStack(cdk.Stack):
             )
         )
 
+        # X-Ray — allow SDK to push trace segments and telemetry
+        execution_role.add_to_policy(
+            iam.PolicyStatement(
+                sid="XRayAccess",
+                effect=iam.Effect.ALLOW,
+                actions=[
+                    "xray:PutTraceSegments",
+                    "xray:PutTelemetryRecords",
+                    "xray:GetSamplingRules",
+                    "xray:GetSamplingTargets",
+                ],
+                resources=["*"],  # X-Ray does not support resource-level restrictions
+            )
+        )
+
         # EventBridge — publish domain events
         execution_role.add_to_policy(
             iam.PolicyStatement(
@@ -292,6 +307,8 @@ class IdentityManagerStack(cdk.Stack):
                 "JWT_KEYS_SECRET_ARN": jwt_secret.secret_arn,
                 # Keep in sync with cors_preflight allow_origins above
                 "ALLOWED_ORIGINS": ",".join(_cors_origins),
+                # X-Ray — active tracing for Lambda + SDK patching (boto3, requests, httpx)
+                "XRAY_ENABLED": "true",
             },
             log_group=log_group,
             tracing=lambda_.Tracing.ACTIVE,
