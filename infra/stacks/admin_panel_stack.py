@@ -357,10 +357,15 @@ class AdminPanelStack(cdk.Stack):
                 content_security_policy=cloudfront.ResponseHeadersContentSecurityPolicy(
                     content_security_policy=(
                         "default-src 'self'; "
-                        f"connect-src 'self' https://{domain_name}/api/v1 https://auth.{DOMAIN}; "
+                        # Plugins are loaded as <script> tags from their own service origins.
+                        # Each micro-frontend service must be listed here explicitly.
+                        f"script-src 'self' https://registry.{DOMAIN}; "
+                        "connect-src 'self' "
+                        f"https://{domain_name}/api/v1 "
+                        f"https://auth.{DOMAIN} "
+                        f"https://registry.{DOMAIN}; "
                         "img-src 'self' data: https:; "
                         "style-src 'self' 'unsafe-inline'; "
-                        "script-src 'self'; "
                         "font-src 'self' data:; "
                         "frame-ancestors 'none'; "
                         "base-uri 'self'; "
