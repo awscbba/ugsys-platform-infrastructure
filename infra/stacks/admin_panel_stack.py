@@ -246,12 +246,11 @@ class AdminPanelStack(cdk.Stack):
                     if env_name == "prod"
                     else f"https://profiles.dev.{DOMAIN}"
                 ),
-                # RS256 public key — resolved from Secrets Manager at deploy time.
-                # The Lambda reads this env var to verify JWT signatures.
-                "JWT_PUBLIC_KEY": jwt_keys_secret.secret_value_from_json(
-                    "public_key"
-                ).unsafe_unwrap(),
-                "JWT_KEY_ID": jwt_keys_secret.secret_value_from_json("key_id").unsafe_unwrap(),
+                # JWT keys secret ARN — Lambda fetches the public key from Secrets Manager
+                # at cold start via jwt_validation.py. Using the ARN avoids the
+                # CloudFormation dynamic reference limitation where Lambda receives the
+                # literal {{resolve:secretsmanager:...}} string instead of the resolved value.
+                "JWT_KEYS_SECRET_ARN": jwt_keys_secret.secret_arn,
             },
             log_group=log_group,
             tracing=lambda_.Tracing.ACTIVE,
