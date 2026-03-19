@@ -11,6 +11,7 @@ Resources:
       - Cache behaviors: /assets/* → 1yr immutable, default → no-cache
       - Custom error responses: 403/404 → /index.html (200) for SPA routing
       - Response headers policy with strict CSP
+      - Plugin behaviors: /plugin-manifest.json + /plugins/* → CORS for admin.apps.cloud.org.bo
   - Route53 A alias record pointing to CloudFront
 """
 
@@ -25,6 +26,52 @@ from constructs import Construct
 
 DOMAIN = "apps.cloud.org.bo"
 FRONTEND_SUBDOMAIN = "registry"
+
+
+def _security_headers(domain: str | None = None) -> cloudfront.ResponseSecurityHeadersBehavior:
+    """
+    Common security headers for all CloudFront behaviors in this stack.
+    Pass `domain` to include a strict CSP (for HTML-serving behaviors).
+    Omit it for plugin/asset behaviors where no CSP is needed.
+    """
+    csp = None
+    if domain:
+        csp = cloudfront.ResponseHeadersContentSecurityPolicy(
+            content_security_policy=(
+                "default-src 'self'; "
+                f"connect-src 'self' https://api.{domain} https://auth.{domain}; "
+                "img-src 'self' data: https:; "
+                "style-src 'self' 'unsafe-inline'; "
+                "script-src 'self'; "
+                "font-src 'self'; "
+                "frame-ancestors 'none'; "
+                "base-uri 'self'; "
+                "form-action 'self'"
+            ),
+            override=True,
+        )
+    return cloudfront.ResponseSecurityHeadersBehavior(
+        content_type_options=cloudfront.ResponseHeadersContentTypeOptions(override=True),
+        frame_options=cloudfront.ResponseHeadersFrameOptions(
+            frame_option=cloudfront.HeadersFrameOption.DENY,
+            override=True,
+        ),
+        referrer_policy=cloudfront.ResponseHeadersReferrerPolicy(
+            referrer_policy=cloudfront.HeadersReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN,
+            override=True,
+        ),
+        strict_transport_security=cloudfront.ResponseHeadersStrictTransportSecurity(
+            access_control_max_age=cdk.Duration.days(365),
+            include_subdomains=True,
+            preload=True,
+            override=True,
+        ),
+        xss_protection=cloudfront.ResponseHeadersXSSProtection(
+            protection=False,  # Disabled — CSP is the correct defense
+            override=True,
+        ),
+        content_security_policy=csp,
+    )
 
 
 class FrontendStack(cdk.Stack):
@@ -79,47 +126,12 @@ class FrontendStack(cdk.Stack):
         # ── ACM certificate (must be in us-east-1 for CloudFront) ─────────────
         certificate = acm.Certificate.from_certificate_arn(self, "Certificate", certificate_arn)
 
-        # ── Response headers policy (CSP + security headers) ──────────────────
+        # ── Response headers policy — SPA pages (CSP + security headers) ──────
         response_headers_policy = cloudfront.ResponseHeadersPolicy(
             self,
             "SecurityHeadersPolicy",
             response_headers_policy_name=f"ugsys-frontend-security-{env_name}",
-            security_headers_behavior=cloudfront.ResponseSecurityHeadersBehavior(
-                content_type_options=cloudfront.ResponseHeadersContentTypeOptions(override=True),
-                frame_options=cloudfront.ResponseHeadersFrameOptions(
-                    frame_option=cloudfront.HeadersFrameOption.DENY,
-                    override=True,
-                ),
-                referrer_policy=cloudfront.ResponseHeadersReferrerPolicy(
-                    referrer_policy=cloudfront.HeadersReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN,
-                    override=True,
-                ),
-                strict_transport_security=cloudfront.ResponseHeadersStrictTransportSecurity(
-                    access_control_max_age=cdk.Duration.days(365),
-                    include_subdomains=True,
-                    preload=True,
-                    override=True,
-                ),
-                xss_protection=cloudfront.ResponseHeadersXSSProtection(
-                    protection=False,  # Disabled — CSP is the correct defense
-                    override=True,
-                ),
-                content_security_policy=cloudfront.ResponseHeadersContentSecurityPolicy(
-                    content_security_policy=(
-                        "default-src 'self'; "
-                        # api.* — registry API; auth.* — identity-manager (login/register/refresh)
-                        f"connect-src 'self' https://api.{DOMAIN} https://auth.{DOMAIN}; "
-                        "img-src 'self' data: https:; "
-                        "style-src 'self' 'unsafe-inline'; "
-                        "script-src 'self'; "
-                        "font-src 'self'; "
-                        "frame-ancestors 'none'; "
-                        "base-uri 'self'; "
-                        "form-action 'self'"
-                    ),
-                    override=True,
-                ),
-            ),
+            security_headers_behavior=_security_headers(domain=DOMAIN),
             custom_headers_behavior=cloudfront.ResponseCustomHeadersBehavior(
                 custom_headers=[
                     cloudfront.ResponseCustomHeader(
@@ -135,6 +147,46 @@ class FrontendStack(cdk.Stack):
                     cloudfront.ResponseCustomHeader(
                         header="Cross-Origin-Resource-Policy",
                         value="same-origin",
+                        override=True,
+                    ),
+                ]
+            ),
+        )
+
+        # ── Response headers policy — plugin files (CORS for admin panel) ─────
+        # /plugin-manifest.json and /plugins/* are fetched cross-origin by
+        # admin.apps.cloud.org.bo (micro-frontend shell). Differences vs above:
+        #   - Adds Access-Control-Allow-Origin: https://admin.apps.cloud.org.bo
+        #   - Cross-Origin-Resource-Policy: cross-origin (not same-origin)
+        #   - No CSP — these paths serve JSON/JS, not HTML documents
+        plugin_cors_policy = cloudfront.ResponseHeadersPolicy(
+            self,
+            "PluginCorsHeadersPolicy",
+            response_headers_policy_name=f"ugsys-registry-plugin-cors-{env_name}",
+            cors_behavior=cloudfront.ResponseHeadersCorsBehavior(
+                access_control_allow_origins=["https://admin.apps.cloud.org.bo"],
+                access_control_allow_headers=["*"],
+                access_control_allow_methods=["GET", "HEAD"],
+                access_control_allow_credentials=False,
+                access_control_max_age=cdk.Duration.seconds(86400),
+                origin_override=True,
+            ),
+            security_headers_behavior=_security_headers(),
+            custom_headers_behavior=cloudfront.ResponseCustomHeadersBehavior(
+                custom_headers=[
+                    cloudfront.ResponseCustomHeader(
+                        header="Permissions-Policy",
+                        value="camera=(), microphone=(), geolocation=(), payment=()",
+                        override=True,
+                    ),
+                    cloudfront.ResponseCustomHeader(
+                        header="Cross-Origin-Opener-Policy",
+                        value="same-origin",
+                        override=True,
+                    ),
+                    cloudfront.ResponseCustomHeader(
+                        header="Cross-Origin-Resource-Policy",
+                        value="cross-origin",
                         override=True,
                     ),
                 ]
@@ -179,6 +231,24 @@ class FrontendStack(cdk.Stack):
                     viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
                     cache_policy=cloudfront.CachePolicy.CACHING_OPTIMIZED,
                     response_headers_policy=response_headers_policy,
+                    allowed_methods=cloudfront.AllowedMethods.ALLOW_GET_HEAD,
+                    compress=True,
+                ),
+                # Plugin manifest — fetched cross-origin by admin.apps.cloud.org.bo
+                "/plugin-manifest.json": cloudfront.BehaviorOptions(
+                    origin=origins.S3BucketOrigin.with_origin_access_control(self.bucket),
+                    viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+                    cache_policy=cloudfront.CachePolicy.CACHING_DISABLED,
+                    response_headers_policy=plugin_cors_policy,
+                    allowed_methods=cloudfront.AllowedMethods.ALLOW_GET_HEAD,
+                    compress=True,
+                ),
+                # Plugin JS bundles — fetched cross-origin by admin.apps.cloud.org.bo
+                "/plugins/*": cloudfront.BehaviorOptions(
+                    origin=origins.S3BucketOrigin.with_origin_access_control(self.bucket),
+                    viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+                    cache_policy=cloudfront.CachePolicy.CACHING_DISABLED,
+                    response_headers_policy=plugin_cors_policy,
                     allowed_methods=cloudfront.AllowedMethods.ALLOW_GET_HEAD,
                     compress=True,
                 ),
